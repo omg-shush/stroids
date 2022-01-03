@@ -3,9 +3,8 @@ use std::ffi::{CString, c_void, NulError};
 
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface};
-use ash::prelude::VkResult;
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfoBuilder, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT};
+use ash::vk::{PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags};
 
 pub struct VulkanInstance {
     instance: Instance,
@@ -80,21 +79,36 @@ impl VulkanInstance {
         let debug_utils_messenger = unsafe { debug_utils.create_debug_utils_messenger(&debug_create_info, None)? };
 
         let device = VulkanInstance::select_device(&instance)?;
+        let graphics_queue = unsafe { device.get_device_queue(0, 0) };
+        let draw_queue = graphics_queue.clone();
 
         Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, device })
     }
 
     // Selects the first available GPU, preferring discrete cards over others
     // TODO allow user choice
-    fn select_device(instance: &Instance) -> VkResult<Device> {
+    fn select_device(instance: &Instance) -> Result<Device, Box<dyn Error>> {
         let devices = unsafe { instance.enumerate_physical_devices()? };
         // TODO what if devices len is 0?
         let mut discrete = devices.iter().filter(|d| {
             unsafe { instance.get_physical_device_properties(**d).device_type == PhysicalDeviceType::DISCRETE_GPU }
         });
         let selected = discrete.next().unwrap_or(&devices[0]);
-        // let queues = DeviceQueueCreateInfo::builder()
-        let create_info = DeviceCreateInfo::builder();
-        unsafe { instance.create_device(*selected, &create_info, None) }
+
+        // Request rendering and transfer queues
+        // TODO do something smarter than using the same queue for both
+        let available = unsafe { instance.get_physical_device_queue_family_properties(*selected) };
+        let (queue_index, _) = available.iter().enumerate().find(|(_i, family)| {
+            family.queue_count > 0 && family.queue_flags.contains(QueueFlags::GRAPHICS) && family.queue_flags.contains(QueueFlags::TRANSFER)
+        }).ok_or("No usable queue family found")?;
+        let graphics_queue_info = DeviceQueueCreateInfo::builder()
+            .queue_family_index(queue_index as u32)
+            .queue_priorities(&[0.5]);
+        let queue_infos = [*graphics_queue_info];
+
+        let create_info = DeviceCreateInfo::builder()
+            .queue_create_infos(&queue_infos);
+        let device = unsafe { instance.create_device(*selected, &create_info, None) }.map_err(|e| Box::new(e) as Box<dyn Error>)?;
+        Ok (device)
     }
 }
