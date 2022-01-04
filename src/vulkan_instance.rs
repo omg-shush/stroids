@@ -4,18 +4,23 @@ use std::ffi::{CString, c_void, NulError};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags};
+use ash::vk::{PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, Win32SurfaceCreateFlagsKHR, SurfaceKHR};
+use winit::platform::windows::WindowExtWindows;
+use winit::window::Window;
 
 pub struct VulkanInstance {
     instance: Instance,
     debug_utils: DebugUtils,
     debug_utils_messenger: DebugUtilsMessengerEXT,
+    surface_loader: Surface,
+    surface: SurfaceKHR,
     device: Device
 }
 
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
         unsafe {
+            self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
             self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None)
         };
@@ -36,7 +41,7 @@ unsafe extern "system" fn debug_utils_callback(
 }
 
 impl VulkanInstance {
-    pub fn new() -> Result<VulkanInstance, Box<dyn Error>> {
+    pub fn new(window: &Window) -> Result<VulkanInstance, Box<dyn Error>> {
         let entry = unsafe { Entry::new() }?;
 
         // Describe application
@@ -78,16 +83,30 @@ impl VulkanInstance {
         let debug_utils = DebugUtils::new(&entry, &instance);
         let debug_utils_messenger = unsafe { debug_utils.create_debug_utils_messenger(&debug_create_info, None)? };
 
-        let device = VulkanInstance::select_device(&instance)?;
+        // Init platform-specific surface
+        let (surface_loader, surface) = VulkanInstance::init_win32(&entry, &instance, &window)?;
+
+        // Init device & queues
+        let device = VulkanInstance::select_device(&instance, &surface_loader, &surface)?;
         let graphics_queue = unsafe { device.get_device_queue(0, 0) };
         let draw_queue = graphics_queue.clone();
 
-        Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, device })
+        Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, surface_loader, surface, device })
+    }
+
+    fn init_win32(entry: &Entry, instance: &Instance, window: &Window) -> Result<(Surface, SurfaceKHR), Box<dyn Error>> {
+        let win32_surface_loader = Win32Surface::new(entry, instance);
+        let create_info = Win32SurfaceCreateInfoKHR::builder()
+            .hinstance(window.hinstance())
+            .hwnd(window.hwnd());
+        let surface = unsafe { win32_surface_loader.create_win32_surface(&create_info, None) }?;
+        let surface_loader = Surface::new(&entry, &instance);
+        Ok ((surface_loader, surface))
     }
 
     // Selects the first available GPU, preferring discrete cards over others
     // TODO allow user choice
-    fn select_device(instance: &Instance) -> Result<Device, Box<dyn Error>> {
+    fn select_device(instance: &Instance, surface_loader: &Surface, surface: &SurfaceKHR) -> Result<Device, Box<dyn Error>> {
         let devices = unsafe { instance.enumerate_physical_devices()? };
         // TODO what if devices len is 0?
         let mut discrete = devices.iter().filter(|d| {
@@ -98,8 +117,10 @@ impl VulkanInstance {
         // Request rendering and transfer queues
         // TODO do something smarter than using the same queue for both
         let available = unsafe { instance.get_physical_device_queue_family_properties(*selected) };
-        let (queue_index, _) = available.iter().enumerate().find(|(_i, family)| {
-            family.queue_count > 0 && family.queue_flags.contains(QueueFlags::GRAPHICS) && family.queue_flags.contains(QueueFlags::TRANSFER)
+        let (queue_index, _) = available.iter().enumerate().find(|(i, family)| {
+            family.queue_count > 0
+            && family.queue_flags.contains(QueueFlags::GRAPHICS | QueueFlags::TRANSFER)
+            && unsafe { surface_loader.get_physical_device_surface_support(*selected, *i as u32, *surface).unwrap_or(false) }
         }).ok_or("No usable queue family found")?;
         let graphics_queue_info = DeviceQueueCreateInfo::builder()
             .queue_family_index(queue_index as u32)

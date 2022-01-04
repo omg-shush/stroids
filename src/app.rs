@@ -8,7 +8,7 @@ use winit::window::{WindowBuilder, Window};
 
 pub struct App {
     event_loop: EventLoop<()>,
-    window: Window
+    pub window: Window
 }
 
 impl App {
