@@ -2,9 +2,9 @@ use std::error::Error;
 use std::ffi::{CString, c_void, NulError};
 
 use ash::extensions::ext::DebugUtils;
-use ash::extensions::khr::{Surface, Win32Surface};
+use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, Win32SurfaceCreateFlagsKHR, SurfaceKHR};
+use ash::vk::{Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags};
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
 
@@ -14,12 +14,20 @@ pub struct VulkanInstance {
     debug_utils_messenger: DebugUtilsMessengerEXT,
     surface_loader: Surface,
     surface: SurfaceKHR,
-    device: Device
+    device: Device,
+    graphics_queue: Queue,
+    transfer_queue: Queue,
+    swapchain_loader: Swapchain,
+    swapchain: SwapchainKHR,
+    swapchain_image_views: Vec<ImageView>,
+
 }
 
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
         unsafe {
+            self.swapchain_image_views.iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
+            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
             self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None)
@@ -87,11 +95,63 @@ impl VulkanInstance {
         let (surface_loader, surface) = VulkanInstance::init_win32(&entry, &instance, &window)?;
 
         // Init device & queues
-        let device = VulkanInstance::select_device(&instance, &surface_loader, &surface)?;
+        let (card, device, queue_family_indices) = VulkanInstance::select_device(&instance, &surface_loader, &surface, &layers)?;
         let graphics_queue = unsafe { device.get_device_queue(0, 0) };
-        let draw_queue = graphics_queue.clone();
+        let transfer_queue = graphics_queue.clone();
 
-        Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, surface_loader, surface, device })
+        // Init swapchain
+        let (swapchain_loader, swapchain, swapchain_image_views) = VulkanInstance::init_swapchain(&surface_loader, &surface, &card, &instance, &device, &queue_family_indices)?;
+
+        Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, surface_loader, surface, device, graphics_queue, transfer_queue, swapchain_loader, swapchain, swapchain_image_views })
+    }
+
+    fn init_swapchain(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device, queues: &Vec<u32>) -> Result<(Swapchain, SwapchainKHR, Vec<ImageView>), Box<dyn Error>> {
+        let surface_caps = unsafe { surface_loader.get_physical_device_surface_capabilities(*card, *surface) }?;
+        let surface_presents = unsafe { surface_loader.get_physical_device_surface_present_modes(*card, *surface) }?;
+        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(*card, *surface) }?;
+
+        // TODO smarter selection of format
+        let surface_format = surface_formats.get(0).ok_or("No surface formats available")?;
+        let present_mode = if surface_presents.contains(&PresentModeKHR::FIFO_RELAXED) {
+            PresentModeKHR::FIFO_RELAXED
+        } else {
+            PresentModeKHR::FIFO
+        };
+        let create_info = SwapchainCreateInfoKHR::builder()
+            .surface(*surface)
+            .min_image_count(3.clamp(surface_caps.min_image_count, surface_caps.max_image_count))
+            .image_format(surface_format.format)
+            .image_color_space(surface_format.color_space)
+            .image_extent(surface_caps.current_extent)
+            .image_array_layers(1)
+            .image_usage(ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_sharing_mode(SharingMode::EXCLUSIVE)
+            .queue_family_indices(&queues)
+            .pre_transform(surface_caps.current_transform)
+            .composite_alpha(CompositeAlphaFlagsKHR::OPAQUE)
+            .present_mode(present_mode);
+
+        let swapchain_loader = Swapchain::new(instance, device);
+        let swapchain = unsafe { swapchain_loader.create_swapchain(&create_info, None)? };
+        
+        // Create image views
+        let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain)? };
+        let swapchain_image_views = swapchain_images.iter().map(|image| {
+            let subresource_range = ImageSubresourceRange::builder()
+                .aspect_mask(ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1);
+            let create_info = ImageViewCreateInfo::builder()
+                .image(*image)
+                .view_type(ImageViewType::TYPE_2D)
+                .format(surface_format.format)
+                .subresource_range(*subresource_range);
+            unsafe { device.create_image_view(&create_info, None) }
+        }).collect::<Result<Vec<_>, _>>()?;
+        
+        Ok ((swapchain_loader, swapchain, swapchain_image_views))
     }
 
     fn init_win32(entry: &Entry, instance: &Instance, window: &Window) -> Result<(Surface, SurfaceKHR), Box<dyn Error>> {
@@ -106,7 +166,7 @@ impl VulkanInstance {
 
     // Selects the first available GPU, preferring discrete cards over others
     // TODO allow user choice
-    fn select_device(instance: &Instance, surface_loader: &Surface, surface: &SurfaceKHR) -> Result<Device, Box<dyn Error>> {
+    fn select_device(instance: &Instance, surface_loader: &Surface, surface: &SurfaceKHR, layers: &[*const i8]) -> Result<(PhysicalDevice, Device, Vec<u32>), Box<dyn Error>> {
         let devices = unsafe { instance.enumerate_physical_devices()? };
         // TODO what if devices len is 0?
         let mut discrete = devices.iter().filter(|d| {
@@ -127,9 +187,12 @@ impl VulkanInstance {
             .queue_priorities(&[0.5]);
         let queue_infos = [*graphics_queue_info];
 
+        let device_extensions = vec![Swapchain::name().as_ptr()];
         let create_info = DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_infos);
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&device_extensions)
+            .enabled_layer_names(layers);
         let device = unsafe { instance.create_device(*selected, &create_info, None) }.map_err(|e| Box::new(e) as Box<dyn Error>)?;
-        Ok (device)
+        Ok ((*selected, device, vec![queue_index as u32]))
     }
 }
