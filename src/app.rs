@@ -25,7 +25,7 @@ impl App {
     }
 
     pub fn run(self) {
-        self.event_loop.run(|event, _, control| {
+        self.event_loop.run(move |event, _, control| {
             // Wait until next frame needs to be drawn
             let frame_time = Duration::from_secs_f32(1.0 / 60.0);
             *control = ControlFlow::WaitUntil(Instant::now() + frame_time);
@@ -42,8 +42,11 @@ impl App {
                 } => {
                     *control = ControlFlow::Exit
                 },
-                Event::MainEventsCleared => {
+                Event::RedrawRequested(_) => {
                     // TODO render
+                },
+                Event::MainEventsCleared => {
+                    self.window.request_redraw();
                 },
                 _ => {}
             }

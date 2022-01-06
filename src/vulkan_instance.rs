@@ -4,7 +4,8 @@ use std::ffi::{CString, c_void, NulError};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags};
+use ash::vk::{Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents};
+use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
 
@@ -20,12 +21,24 @@ pub struct VulkanInstance {
     swapchain_loader: Swapchain,
     swapchain: SwapchainKHR,
     swapchain_image_views: Vec<ImageView>,
-
+    render_pass: RenderPass,
+    framebuffers: Vec<Framebuffer>,
+    graphics_pipeline: Pipeline,
+    pipeline_layout: PipelineLayout,
+    graphics_pool: CommandPool,
+    transfer_pool: CommandPool,
+    graphics_command_buffers: Vec<CommandBuffer>
 }
 
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_command_pool(self.graphics_pool, None);
+            self.device.destroy_command_pool(self.transfer_pool, None);
+            self.device.destroy_pipeline(self.graphics_pipeline, None);
+            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.framebuffers.iter().for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
+            self.device.destroy_render_pass(self.render_pass, None);
             self.swapchain_image_views.iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
             self.surface_loader.destroy_surface(self.surface, None);
@@ -100,18 +113,223 @@ impl VulkanInstance {
         let transfer_queue = graphics_queue.clone();
 
         // Init swapchain
-        let (swapchain_loader, swapchain, swapchain_image_views) = VulkanInstance::init_swapchain(&surface_loader, &surface, &card, &instance, &device, &queue_family_indices)?;
-
-        Ok (VulkanInstance { instance, debug_utils, debug_utils_messenger, surface_loader, surface, device, graphics_queue, transfer_queue, swapchain_loader, swapchain, swapchain_image_views })
-    }
-
-    fn init_swapchain(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device, queues: &Vec<u32>) -> Result<(Swapchain, SwapchainKHR, Vec<ImageView>), Box<dyn Error>> {
-        let surface_caps = unsafe { surface_loader.get_physical_device_surface_capabilities(*card, *surface) }?;
-        let surface_presents = unsafe { surface_loader.get_physical_device_surface_present_modes(*card, *surface) }?;
-        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(*card, *surface) }?;
-
+        let surface_caps = unsafe { surface_loader.get_physical_device_surface_capabilities(card, surface) }?;
+        let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(card, surface) }?;
         // TODO smarter selection of format
         let surface_format = surface_formats.get(0).ok_or("No surface formats available")?;
+        let (swapchain_loader, swapchain, swapchain_image_views) = VulkanInstance::init_swapchain(&surface_loader, &surface, &card, &instance, &device, &surface_caps, surface_format, &queue_family_indices)?;
+
+        // Init renderpass
+        let render_pass = VulkanInstance::init_renderpass(&device, surface_format)?;
+        let framebuffers = VulkanInstance::init_framebuffers(&device, &render_pass, &swapchain_image_views, surface_caps.current_extent)?;
+
+        // Construct pipeline
+        let (graphics_pipeline, pipeline_layout) = VulkanInstance::init_pipeline(&device, surface_caps.current_extent, &render_pass)?;
+
+        // Create command buffers
+        let command_pools = VulkanInstance::init_command_pools(&device, vec![0, 0])?;
+        let graphics_pool = command_pools[0];
+        let transfer_pool = command_pools[1];
+        let graphics_command_buffers = VulkanInstance::init_command_buffers(&device, &graphics_pool, swapchain_image_views.len() as u32)?;
+
+        // Add rendering commands to graphics command buffers
+        VulkanInstance::write_graphics_commands(&device, &render_pass, &framebuffers, surface_caps.current_extent, &graphics_pipeline, &graphics_command_buffers)?;
+
+        Ok (VulkanInstance {
+            instance, debug_utils, debug_utils_messenger,
+            surface_loader, surface,
+            device, graphics_queue, transfer_queue,
+            swapchain_loader, swapchain, swapchain_image_views,
+            render_pass, framebuffers,
+            graphics_pipeline, pipeline_layout,
+            graphics_pool, transfer_pool,
+            graphics_command_buffers
+        })
+    }
+
+    fn write_graphics_commands(device: &Device, render_pass: &RenderPass, framebuffers: &Vec<Framebuffer>, extent: Extent2D, pipeline: &Pipeline, command_buffers: &Vec<CommandBuffer>) -> Result<(), Box<dyn Error>> {
+        for (i, &buf) in command_buffers.iter().enumerate() {
+            let begin_info = CommandBufferBeginInfo::builder()
+                .flags(CommandBufferUsageFlags::empty()); // TODO eventually one time submit
+            unsafe { device.begin_command_buffer(buf, &begin_info)? };
+            let clear_values = [ClearValue {
+                color: ClearColorValue {
+                    float32: [0.0, 0.0, 0.08, 1.0]
+                }
+            }];
+            let create_info = RenderPassBeginInfo::builder()
+                .render_pass(*render_pass)
+                .framebuffer(framebuffers[i])
+                .render_area(Rect2D {
+                    offset: Offset2D { x: 0, y: 0 },
+                    extent
+                })
+                .clear_values(&clear_values);
+            unsafe {
+                device.cmd_begin_render_pass(buf, &create_info, SubpassContents::INLINE);
+                device.cmd_bind_pipeline(buf, PipelineBindPoint::GRAPHICS, *pipeline);
+                device.cmd_draw(buf, 1, 1, 0, 0);
+                device.cmd_end_render_pass(buf);
+                device.end_command_buffer(buf)?;
+            }
+        }
+        Ok (())
+    }
+
+    fn init_command_buffers(device: &Device, graphics_pool: &CommandPool, swapchain_size: u32) -> Result<Vec<CommandBuffer>, Box<dyn Error>> {
+        let create_info = CommandBufferAllocateInfo::builder()
+            .command_pool(*graphics_pool)
+            .command_buffer_count(swapchain_size);
+        unsafe { device.allocate_command_buffers(&create_info).map_err(|e| Box::new(e) as Box<dyn Error>) }
+    }
+
+    fn init_command_pools(device: &Device, queue_families: Vec<u32>) -> Result<Vec<CommandPool>, Box<dyn Error>> {
+        queue_families.into_iter().map(|q| {
+            let create_info = CommandPoolCreateInfo::builder()
+                .queue_family_index(q)
+                .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+            unsafe { device.create_command_pool(&create_info, None) }
+        }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
+    }
+
+    fn init_pipeline(device: &Device, extent: Extent2D, render_pass: &RenderPass) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
+        let vertex_module = {
+            let create_info = ShaderModuleCreateInfo::builder()
+                .code(include_glsl!("./shaders/shader.vert"));
+            unsafe { device.create_shader_module(&create_info, None)? }
+        };
+        let fragment_module = {
+            let create_info = ShaderModuleCreateInfo::builder()
+                .code(include_glsl!("./shaders/shader.frag"));
+            unsafe { device.create_shader_module(&create_info, None)? }
+        };
+        let shader_entry = CString::new("main")?;
+        let vertex_stage = PipelineShaderStageCreateInfo::builder()
+            .stage(ShaderStageFlags::VERTEX)
+            .module(vertex_module)
+            .name(&shader_entry);
+        let fragment_stage = PipelineShaderStageCreateInfo::builder()
+            .stage(ShaderStageFlags::FRAGMENT)
+            .module(fragment_module)
+            .name(&shader_entry);
+        let vertex_input_state = PipelineVertexInputStateCreateInfo::builder();
+        let input_assembly_state = PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(PrimitiveTopology::POINT_LIST);
+        let viewports = [ Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: extent.width as f32,
+                height: extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0
+        } ];
+        let scissors = [ Rect2D {
+            offset: Offset2D { x: 0, y: 0 },
+            extent
+        } ];
+        let viewport_state = PipelineViewportStateCreateInfo::builder()
+            .viewports(&viewports)
+            .scissors(&scissors);
+        let rasterization_state = PipelineRasterizationStateCreateInfo::builder()
+            .line_width(1.0)
+            .front_face(FrontFace::CLOCKWISE)
+            .cull_mode(CullModeFlags::NONE)
+            .polygon_mode(PolygonMode::FILL);
+        let multisample_state = PipelineMultisampleStateCreateInfo::builder()
+            .rasterization_samples(SampleCountFlags::TYPE_1);
+        let color_blend_attachments = [ PipelineColorBlendAttachmentState::builder()
+            .blend_enable(true)
+            .src_color_blend_factor(BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(BlendOp::ADD)
+            .src_alpha_blend_factor(BlendFactor::SRC_ALPHA)
+            .dst_alpha_blend_factor(BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(BlendOp::ADD)
+            .color_write_mask(ColorComponentFlags::all())
+            .build()
+        ];
+        let color_blend_state = PipelineColorBlendStateCreateInfo::builder()
+            .attachments(&color_blend_attachments);
+        let pipeline_layout = {
+            let create_info = PipelineLayoutCreateInfo::builder();
+            unsafe { device.create_pipeline_layout(&create_info, None)? }
+        };
+        let graphics_pipeline = {
+            let create_infos = [ GraphicsPipelineCreateInfo::builder()
+                .stages(&[*vertex_stage, *fragment_stage])
+                .vertex_input_state(&vertex_input_state)
+                .input_assembly_state(&input_assembly_state)
+                .viewport_state(&viewport_state)
+                .rasterization_state(&rasterization_state)
+                .multisample_state(&multisample_state)
+                .color_blend_state(&color_blend_state)
+                .layout(pipeline_layout)
+                .render_pass(*render_pass)
+                .subpass(0)
+                .build()
+            ];
+            unsafe { device.create_graphics_pipelines(PipelineCache::null(), &create_infos, None).map_err(|t| t.1)? }
+        }[0];
+
+        // Clean up shader modules
+        unsafe {
+            device.destroy_shader_module(vertex_module, None);
+            device.destroy_shader_module(fragment_module, None);
+        }
+        
+        Ok ((graphics_pipeline, pipeline_layout))
+    }
+
+    fn init_framebuffers(device: &Device, render_pass: &RenderPass, swapchain_image_views: &Vec<ImageView>, extent: Extent2D) -> Result<Vec<Framebuffer>, Box<dyn Error>> {
+        swapchain_image_views.iter().map(|image_view| {
+            let attachments = [*image_view];
+            let create_info = FramebufferCreateInfo::builder()
+                .render_pass(*render_pass)
+                .attachments(&attachments)
+                .width(extent.width)
+                .height(extent.height)
+                .layers(1);
+            unsafe { device.create_framebuffer(&create_info, None) }
+        }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
+    }
+
+    fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR) -> Result<RenderPass, Box<dyn Error>> {
+        let color_attachment = AttachmentDescription::builder()
+            .format(surface_format.format)
+            .load_op(AttachmentLoadOp::CLEAR)
+            .store_op(AttachmentStoreOp::STORE)
+            .initial_layout(ImageLayout::UNDEFINED)
+            .final_layout(ImageLayout::PRESENT_SRC_KHR)
+            .samples(SampleCountFlags::TYPE_1);
+        let attachments = [*color_attachment];
+        let color_attachment_reference = AttachmentReference::builder()
+            .attachment(0)
+            .layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let color_attachment_references = [*color_attachment_reference];
+        let subpass = SubpassDescription::builder()
+            .color_attachments(&color_attachment_references)
+            .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
+        let subpasses = [*subpass];
+
+        let subpass_dependency = SubpassDependency::builder()
+            .src_subpass(SUBPASS_EXTERNAL)
+            .src_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_subpass(0)
+            .dst_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(AccessFlags::COLOR_ATTACHMENT_READ | AccessFlags::COLOR_ATTACHMENT_WRITE);
+        let dependencies = [*subpass_dependency];
+
+        let create_info = RenderPassCreateInfo::builder()
+            .attachments(&attachments)
+            .subpasses(&subpasses)
+            .dependencies(&dependencies);
+        let render_pass = unsafe { device.create_render_pass(&create_info, None)? };
+        Ok (render_pass)
+    }
+
+    fn init_swapchain(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device, surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, queues: &Vec<u32>) -> Result<(Swapchain, SwapchainKHR, Vec<ImageView>), Box<dyn Error>> {
+        let surface_presents = unsafe { surface_loader.get_physical_device_surface_present_modes(*card, *surface) }?;
+
         let present_mode = if surface_presents.contains(&PresentModeKHR::FIFO_RELAXED) {
             PresentModeKHR::FIFO_RELAXED
         } else {
