@@ -14,11 +14,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");
 
     let app = App::new()?;
-    let vinstance = VulkanInstance::new(&app.window)?;
+    let vulkan = VulkanInstance::new(&app.window)?;
 
     let asteroid = Asteroid::new(AsteroidType::Metallic, [100, 100, 30]);
 
-    app.run();
+    app.run(vulkan);
 
     Ok(())
 }
