@@ -50,9 +50,10 @@ impl Drop for VulkanInstance {
             self.device.destroy_render_pass(self.render_pass, None);
             self.swapchain_image_views.iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
             self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+            self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
+            self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None);
             self.instance.destroy_instance(None);
-            self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None)
         };
     }
 }
