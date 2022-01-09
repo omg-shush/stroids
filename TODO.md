@@ -1,12 +1,13 @@
 # TODO
 
+- [x] Basic rendering using Vulkan
+- [ ] Solar system rendering
 - [ ] Player space controls
-- [ ] Basic rendering using Vulkan
+- [ ] System player physics
 - [ ] System generation
 - [ ] System rendering
 - [ ] 3D voxel asteroid generation
 - [ ] Asteroid rendering
-- [ ] System player physics
 - [ ] Asteroid player physics
 - [ ] Asteroid factory construction
 - [ ] Asteroid factory analysis

@@ -7,6 +7,7 @@ use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{WindowBuilder, Window};
 use ash::vk::{Fence, PipelineStageFlags, SubmitInfo, PresentInfoKHR};
 
+use crate::system::System;
 use crate::vulkan_instance::VulkanInstance;
 
 pub struct App {
@@ -27,7 +28,7 @@ impl App {
         })
     }
 
-    pub fn run(self, mut vulkan: VulkanInstance) {
+    pub fn run(self, mut vulkan: VulkanInstance, system: System) {
         self.event_loop.run(move |event, _, control| {
             // Wait until next frame needs to be drawn
             let frame_time = Duration::from_secs_f32(1.0 / 60.0);
@@ -43,7 +44,7 @@ impl App {
                         }, ..
                     }, ..
                 } => {
-                    *control = ControlFlow::Exit
+                    *control = ControlFlow::Exit;
                 },
                 Event::RedrawRequested(_) => {
                     let (image_index, _) = unsafe {
@@ -55,10 +56,19 @@ impl App {
                         vulkan.device.wait_for_fences(&[
                             vulkan.fence_draw_ready[vulkan.swapchain_ptr]
                         ], true, u64::MAX).expect("Waiting for fences");
+                        // Now guaranteed that this image's command buffer has been consumed and reset
                         vulkan.device.reset_fences(&[
                             vulkan.fence_draw_ready[vulkan.swapchain_ptr]
                         ]).expect("Resetting fences");
                     }
+
+                    // Rewrite command buffer
+                    let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");
+                    system.render(&vulkan.device, cmdbuf);
+                    unsafe {
+                        vulkan.device.cmd_end_render_pass(cmdbuf);
+                        vulkan.device.end_command_buffer(cmdbuf).expect("Failed to end recording commands");
+                    };
 
                     // Submit command buffer
                     let semaphores_available = [vulkan.semaphore_image_available[vulkan.swapchain_ptr]];

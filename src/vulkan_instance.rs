@@ -4,7 +4,7 @@ use std::ffi::{CString, c_void, NulError};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags};
+use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
@@ -15,9 +15,12 @@ pub struct VulkanInstance {
     debug_utils_messenger: DebugUtilsMessengerEXT,
     surface_loader: Surface,
     surface: SurfaceKHR,
+    card: PhysicalDevice,
     pub device: Device,
     pub graphics_queue: Queue,
     transfer_queue: Queue,
+    pub queue_family_indices: Vec<u32>, // TODO not pub. really abstract away the queues themselves
+    extent: Extent2D,
     pub swapchain_loader: Swapchain,
     pub swapchain: SwapchainKHR,
     pub swapchain_image_views: Vec<ImageView>,
@@ -31,7 +34,9 @@ pub struct VulkanInstance {
     pub graphics_command_buffers: Vec<CommandBuffer>,
     pub semaphore_image_available: Vec<Semaphore>,
     pub semaphore_rendering_finished: Vec<Semaphore>,
-    pub fence_draw_ready: Vec<Fence>
+    pub fence_draw_ready: Vec<Fence>,
+    pub buffers: Vec<Buffer>,
+    pub memory: Vec<DeviceMemory>
 }
 
 impl Drop for VulkanInstance {
@@ -41,6 +46,8 @@ impl Drop for VulkanInstance {
 
             self.device.destroy_command_pool(self.graphics_pool, None);
             self.device.destroy_command_pool(self.transfer_pool, None);
+            self.buffers.iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
+            self.memory.iter().for_each(|memory| self.device.free_memory(*memory, None));
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.semaphore_image_available.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
@@ -142,9 +149,6 @@ impl VulkanInstance {
         let transfer_pool = command_pools[1];
         let graphics_command_buffers = VulkanInstance::init_command_buffers(&device, &graphics_pool, swapchain_image_views.len() as u32)?;
 
-        // Add rendering commands to graphics command buffers
-        VulkanInstance::write_graphics_commands(&device, &render_pass, &framebuffers, surface_caps.current_extent, &graphics_pipeline, &graphics_command_buffers)?;
-
         // Init synchronization
         let semaphore_create_info = SemaphoreCreateInfo::builder();
         let fence_create_info = FenceCreateInfo::builder()
@@ -156,44 +160,54 @@ impl VulkanInstance {
         Ok (VulkanInstance {
             instance, debug_utils, debug_utils_messenger,
             surface_loader, surface,
-            device, graphics_queue, transfer_queue,
-            swapchain_loader, swapchain, swapchain_image_views, swapchain_ptr: 0,
+            card, device, graphics_queue, transfer_queue, queue_family_indices,
+            extent: surface_caps.current_extent, swapchain_loader, swapchain, swapchain_image_views, swapchain_ptr: 0,
             render_pass, framebuffers,
             graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
             semaphore_image_available, semaphore_rendering_finished,
-            fence_draw_ready
+            fence_draw_ready,
+            buffers: vec![], memory: vec![]
         })
     }
 
-    fn write_graphics_commands(device: &Device, render_pass: &RenderPass, framebuffers: &Vec<Framebuffer>, extent: Extent2D, pipeline: &Pipeline, command_buffers: &Vec<CommandBuffer>) -> Result<(), Box<dyn Error>> {
-        for (i, &buf) in command_buffers.iter().enumerate() {
-            let begin_info = CommandBufferBeginInfo::builder()
-                .flags(CommandBufferUsageFlags::empty()); // TODO eventually one time submit
-            unsafe { device.begin_command_buffer(buf, &begin_info)? };
-            let clear_values = [ClearValue {
-                color: ClearColorValue {
-                    float32: [0.0, 0.0, 0.08, 1.0]
-                }
-            }];
-            let create_info = RenderPassBeginInfo::builder()
-                .render_pass(*render_pass)
-                .framebuffer(framebuffers[i])
-                .render_area(Rect2D {
-                    offset: Offset2D { x: 0, y: 0 },
-                    extent
-                })
-                .clear_values(&clear_values);
-            unsafe {
-                device.cmd_begin_render_pass(buf, &create_info, SubpassContents::INLINE);
-                device.cmd_bind_pipeline(buf, PipelineBindPoint::GRAPHICS, *pipeline);
-                device.cmd_draw(buf, 1, 1, 0, 0);
-                device.cmd_end_render_pass(buf);
-                device.end_command_buffer(buf)?;
+    // TODO memory allocator class?
+    pub fn get_memory_type_index(&self, required_properties: MemoryPropertyFlags) -> Result<u32, Box<dyn Error>> {
+        let memory_properties = unsafe { self.instance.get_physical_device_memory_properties(self.card) };
+        for i in 0..memory_properties.memory_type_count {
+            let memory_type = memory_properties.memory_types[i as usize];
+            if memory_type.property_flags.contains(required_properties) {
+                return Ok (i);
             }
         }
-        Ok (())
+        Err ("Could not find memory type with required properties".into())
+    }
+
+    // TODO organize this better
+    pub fn begin_commands(&self) -> Result<CommandBuffer, Box<dyn Error>> {
+        let cmdbuf = self.graphics_command_buffers[self.swapchain_ptr];
+        let begin_info = CommandBufferBeginInfo::builder()
+            .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        unsafe { self.device.begin_command_buffer(cmdbuf, &begin_info)? };
+        let clear_values = [ClearValue {
+            color: ClearColorValue {
+                float32: [0.0, 0.0, 0.08, 1.0]
+            }
+        }];
+        let create_info = RenderPassBeginInfo::builder()
+            .render_pass(self.render_pass)
+            .framebuffer(self.framebuffers[self.swapchain_ptr])
+            .render_area(Rect2D {
+                offset: Offset2D { x: 0, y: 0 },
+                extent: self.extent
+            })
+            .clear_values(&clear_values);
+        unsafe {
+            self.device.cmd_begin_render_pass(cmdbuf, &create_info, SubpassContents::INLINE);
+            self.device.cmd_bind_pipeline(cmdbuf, PipelineBindPoint::GRAPHICS, self.graphics_pipeline); // TODO make caller do this
+        }
+        Ok (cmdbuf)
     }
 
     fn init_command_buffers(device: &Device, graphics_pool: &CommandPool, swapchain_size: u32) -> Result<Vec<CommandBuffer>, Box<dyn Error>> {
@@ -232,7 +246,18 @@ impl VulkanInstance {
             .stage(ShaderStageFlags::FRAGMENT)
             .module(fragment_module)
             .name(&shader_entry);
-        let vertex_input_state = PipelineVertexInputStateCreateInfo::builder();
+        let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
+            .vertex_attribute_descriptions(&[VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: Format::R32G32_SFLOAT,
+                offset: 0
+            }])
+            .vertex_binding_descriptions(&[VertexInputBindingDescription {
+                binding: 0,
+                stride: 8,
+                input_rate: VertexInputRate::VERTEX
+            }]);
         let input_assembly_state = PipelineInputAssemblyStateCreateInfo::builder()
             .topology(PrimitiveTopology::POINT_LIST);
         let viewports = [ Viewport {
