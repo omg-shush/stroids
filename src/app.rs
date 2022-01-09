@@ -64,7 +64,7 @@ impl App {
 
                     // Rewrite command buffer
                     let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");
-                    system.render(&vulkan.device, cmdbuf);
+                    system.render(&vulkan, cmdbuf);
                     unsafe {
                         vulkan.device.cmd_end_render_pass(cmdbuf);
                         vulkan.device.end_command_buffer(cmdbuf).expect("Failed to end recording commands");

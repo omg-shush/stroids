@@ -4,7 +4,7 @@ use std::ffi::{CString, c_void, NulError};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags};
+use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
@@ -28,7 +28,7 @@ pub struct VulkanInstance {
     render_pass: RenderPass,
     framebuffers: Vec<Framebuffer>,
     graphics_pipeline: Pipeline,
-    pipeline_layout: PipelineLayout,
+    pub pipeline_layout: PipelineLayout,
     graphics_pool: CommandPool,
     transfer_pool: CommandPool,
     pub graphics_command_buffers: Vec<CommandBuffer>,
@@ -296,7 +296,12 @@ impl VulkanInstance {
         let color_blend_state = PipelineColorBlendStateCreateInfo::builder()
             .attachments(&color_blend_attachments);
         let pipeline_layout = {
-            let create_info = PipelineLayoutCreateInfo::builder();
+            let create_info = PipelineLayoutCreateInfo::builder()
+                .push_constant_ranges(&[PushConstantRange {
+                    offset: 0,
+                    size: 4,
+                    stage_flags: ShaderStageFlags::VERTEX
+                }]);
             unsafe { device.create_pipeline_layout(&create_info, None)? }
         };
         let graphics_pipeline = {

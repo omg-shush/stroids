@@ -1,5 +1,7 @@
-use ash::Device;
-use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, BufferCreateFlags, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags};
+use std::time::Instant;
+use std::slice;
+
+use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, BufferCreateFlags, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, PipelineBindPoint, DescriptorSet, ShaderStageFlags};
 
 use crate::vulkan_instance::VulkanInstance;
 
@@ -11,6 +13,7 @@ pub struct Planet {
 }
 
 pub struct System {
+    start: Instant,
     planets: Vec<Planet>,
     vertex_buffer: Buffer,
     device_memory: DeviceMemory
@@ -71,13 +74,23 @@ impl System {
         // Register buffer/memory with vulkan for later cleanup
         vulkan.buffers.push(vertex_buffer);
         vulkan.memory.push(device_memory);
-        System { planets, vertex_buffer, device_memory }
+        System { start: Instant::now(), planets, vertex_buffer, device_memory }
     }
 
-    pub fn render(&self, device: &Device, cmdbuf: CommandBuffer) {
+    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer) {
         unsafe {
-            device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
-            device.cmd_draw(cmdbuf, 4, 1, 0, 0);
+            // let descriptor_set = vulkan.device.create_descr
+            // vulkan.device.cmd_bind_descriptor_sets(cmdbuf,
+            //     PipelineBindPoint::GRAPHICS,
+            //     vulkan.pipeline_layout,
+            //     0,
+            //     descriptor_sets,
+            //     0);
+            let time = (Instant::now() - self.start).as_secs_f32();
+            let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);
+            vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, data);
+            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
+            vulkan.device.cmd_draw(cmdbuf, 4, 1, 0, 0);
         };
     }
 }
