@@ -1,7 +1,7 @@
 use std::time::Instant;
 use std::slice;
 
-use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, BufferCreateFlags, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, PipelineBindPoint, DescriptorSet, ShaderStageFlags};
+use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, BufferCreateFlags, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, PipelineBindPoint, DescriptorSet, ShaderStageFlags, DeviceSize};
 
 use crate::vulkan_instance::VulkanInstance;
 
@@ -23,49 +23,71 @@ impl System {
     pub fn new(vulkan: &mut VulkanInstance) -> System {
         let planets = vec![
             Planet {
-                color: [1.0, 0.0, 0.0],
-                radius: 5.0,
-                orbit: 0.1,
-                year: 2.0
+                color: [1.0, 1.0, 0.0],
+                radius: 40.0,
+                orbit: 0.01,
+                year: 20.0
             },
             Planet {
-                color: [0.0, 1.0, 0.0],
+                color: [0.6, 0.1, 0.1],
                 radius: 3.0,
-                orbit: 0.5,
-                year: 5.0
+                orbit: 0.15,
+                year: 0.4
             },
             Planet {
-                color: [0.0, 0.0, 1.0],
-                radius: 1.0,
+                color: [1.0, 0.5, 0.5],
+                radius: 6.0,
+                orbit: 0.3,
+                year: 1.0
+            },
+            Planet {
+                color: [0.5, 1.0, 0.5],
+                radius: 10.0,
+                orbit: 0.5,
+                year: 2.5
+            },
+            Planet {
+                color: [0.3, 0.3, 0.8],
+                radius: 8.0,
+                orbit: 0.65,
+                year: 3.5
+            },
+            Planet {
+                color: [0.5, 0.5, 1.0],
+                radius: 4.0,
                 orbit: 0.8,
-                year: 10.0
+                year: 5.0
             }
         ];
 
-        // TODO calculate using ***PHYSICS***
-        let positions = [ 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5 ];
+        let data = planets.iter()
+            .map(|p| [p.color[0], p.color[1], p.color[2], p.radius, p.orbit, p.year])
+            .flatten()
+            .collect::<Vec<_>>();
+        let size = (data.len() * 4) as DeviceSize;
 
         let (vertex_buffer, device_memory) = unsafe {
             let create_info = BufferCreateInfo::builder()
                 .queue_family_indices(&vulkan.queue_family_indices) // ignored in SharingMode::EXCLUSIVE
                 .flags(BufferCreateFlags::empty())
                 .sharing_mode(SharingMode::EXCLUSIVE)
-                .size(4096) // TODO
+                .size(size)
                 .usage(BufferUsageFlags::VERTEX_BUFFER);
             let vertex_buffer = vulkan.device.create_buffer(&create_info, None).expect("Failed to create buffer");
+            let size = size.max(vulkan.device.get_buffer_memory_requirements(vertex_buffer).size); // Meet minimum buffer size
             let device_memory = {
                 let create_info = MemoryAllocateInfo::builder()
-                    .allocation_size(4096) // TODO
+                    .allocation_size(size)
                     .memory_type_index(vulkan.get_memory_type_index( // TODO try to get device local too
                         MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT).expect("TODO"));
                 vulkan.device.allocate_memory(&create_info, None).expect("Failed to allocate device memory")
             };
-            vulkan.device.bind_buffer_memory(vertex_buffer, device_memory, 0).expect("Failed to bind buffer memory"); // TODO offset???
+            vulkan.device.bind_buffer_memory(vertex_buffer, device_memory, 0).expect("Failed to bind buffer memory");
 
             // Write to buffer
             {
-                let dst = vulkan.device.map_memory(device_memory, 0, 4096, MemoryMapFlags::empty()).expect("Failed to map memory");
-                (dst as *mut f32).copy_from_nonoverlapping(positions.as_ptr(), positions.len());
+                let dst = vulkan.device.map_memory(device_memory, 0, size, MemoryMapFlags::empty()).expect("Failed to map memory");
+                (dst as *mut f32).copy_from_nonoverlapping(data.as_ptr(), data.len());
                 vulkan.device.unmap_memory(device_memory);
             }
 
@@ -90,7 +112,7 @@ impl System {
             let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, data);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
-            vulkan.device.cmd_draw(cmdbuf, 4, 1, 0, 0);
+            vulkan.device.cmd_draw(cmdbuf, self.planets.len() as u32, 1, 0, 0);
         };
     }
 }

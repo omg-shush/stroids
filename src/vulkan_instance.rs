@@ -247,15 +247,35 @@ impl VulkanInstance {
             .module(fragment_module)
             .name(&shader_entry);
         let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
-            .vertex_attribute_descriptions(&[VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: Format::R32G32_SFLOAT,
-                offset: 0
-            }])
+            .vertex_attribute_descriptions(&[
+                VertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    format: Format::R32G32B32_SFLOAT,
+                    offset: 0
+                },
+                VertexInputAttributeDescription {
+                    location: 1,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 12
+                },
+                VertexInputAttributeDescription {
+                    location: 2,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 16
+                },
+                VertexInputAttributeDescription {
+                    location: 3,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 20
+                },
+            ])
             .vertex_binding_descriptions(&[VertexInputBindingDescription {
                 binding: 0,
-                stride: 8,
+                stride: 24,
                 input_rate: VertexInputRate::VERTEX
             }]);
         let input_assembly_state = PipelineInputAssemblyStateCreateInfo::builder()
