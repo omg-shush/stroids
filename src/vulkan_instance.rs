@@ -1,10 +1,11 @@
+use std::cell::RefCell;
 use std::error::Error;
 use std::ffi::{CString, c_void, NulError};
 
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange};
+use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
@@ -27,6 +28,7 @@ pub struct VulkanInstance {
     pub swapchain_ptr: usize,
     render_pass: RenderPass,
     framebuffers: Vec<Framebuffer>,
+    descriptor_set_layout: DescriptorSetLayout,
     graphics_pipeline: Pipeline,
     pub pipeline_layout: PipelineLayout,
     graphics_pool: CommandPool,
@@ -35,8 +37,8 @@ pub struct VulkanInstance {
     pub semaphore_image_available: Vec<Semaphore>,
     pub semaphore_rendering_finished: Vec<Semaphore>,
     pub fence_draw_ready: Vec<Fence>,
-    pub buffers: Vec<Buffer>,
-    pub memory: Vec<DeviceMemory>
+    pub buffers: RefCell<Vec<Buffer>>,
+    pub memory: RefCell<Vec<DeviceMemory>>
 }
 
 impl Drop for VulkanInstance {
@@ -46,10 +48,11 @@ impl Drop for VulkanInstance {
 
             self.device.destroy_command_pool(self.graphics_pool, None);
             self.device.destroy_command_pool(self.transfer_pool, None);
-            self.buffers.iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
-            self.memory.iter().for_each(|memory| self.device.free_memory(*memory, None));
+            self.buffers.borrow().iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
+            self.memory.borrow().iter().for_each(|memory| self.device.free_memory(*memory, None));
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.semaphore_image_available.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
             self.semaphore_rendering_finished.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
             self.fence_draw_ready.iter().for_each(|fence| self.device.destroy_fence(*fence, None));
@@ -141,7 +144,60 @@ impl VulkanInstance {
         let framebuffers = VulkanInstance::init_framebuffers(&device, &render_pass, &swapchain_image_views, surface_caps.current_extent)?;
 
         // Construct pipeline
-        let (graphics_pipeline, pipeline_layout) = VulkanInstance::init_pipeline(&device, surface_caps.current_extent, &render_pass)?;
+        let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
+            .vertex_attribute_descriptions(&[
+                VertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    format: Format::R32G32B32_SFLOAT,
+                    offset: 0
+                },
+                VertexInputAttributeDescription {
+                    location: 1,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 12
+                },
+                VertexInputAttributeDescription {
+                    location: 2,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 16
+                },
+                VertexInputAttributeDescription {
+                    location: 3,
+                    binding: 0,
+                    format: Format::R32_SFLOAT,
+                    offset: 20
+                },
+            ])
+            .vertex_binding_descriptions(&[VertexInputBindingDescription {
+                binding: 0,
+                stride: 24,
+                input_rate: VertexInputRate::VERTEX
+            }]);
+        let descriptor_bindings = [DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(ShaderStageFlags::FRAGMENT)
+            .build()
+        ];
+        let descriptor_set_layout = {
+            let create_info = DescriptorSetLayoutCreateInfo::builder()
+                .bindings(&descriptor_bindings);
+            unsafe { device.create_descriptor_set_layout(&create_info, None)? }
+        };
+        let descriptor_set_layouts = [descriptor_set_layout];
+        let pipeline_layout_state = PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(&[PushConstantRange {
+                offset: 0,
+                size: 4,
+                stage_flags: ShaderStageFlags::VERTEX
+            }])
+            .set_layouts(&descriptor_set_layouts);
+        let (graphics_pipeline, pipeline_layout) = VulkanInstance::init_pipeline(&device, surface_caps.current_extent, &render_pass,
+            *vertex_input_state, *pipeline_layout_state)?;
 
         // Create command buffers
         let command_pools = VulkanInstance::init_command_pools(&device, vec![0, 0])?;
@@ -163,12 +219,12 @@ impl VulkanInstance {
             card, device, graphics_queue, transfer_queue, queue_family_indices,
             extent: surface_caps.current_extent, swapchain_loader, swapchain, swapchain_image_views, swapchain_ptr: 0,
             render_pass, framebuffers,
-            graphics_pipeline, pipeline_layout,
+            descriptor_set_layout, graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
             semaphore_image_available, semaphore_rendering_finished,
             fence_draw_ready,
-            buffers: vec![], memory: vec![]
+            buffers: vec![].into(), memory: vec![].into()
         })
     }
 
@@ -226,7 +282,9 @@ impl VulkanInstance {
         }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
     }
 
-    fn init_pipeline(device: &Device, extent: Extent2D, render_pass: &RenderPass) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
+    fn init_pipeline(device: &Device, extent: Extent2D, render_pass: &RenderPass,
+        vertex_input_state: PipelineVertexInputStateCreateInfo,
+        pipeline_layout_state: PipelineLayoutCreateInfo) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
         let vertex_module = {
             let create_info = ShaderModuleCreateInfo::builder()
                 .code(include_glsl!("./shaders/shader.vert"));
@@ -246,38 +304,6 @@ impl VulkanInstance {
             .stage(ShaderStageFlags::FRAGMENT)
             .module(fragment_module)
             .name(&shader_entry);
-        let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
-            .vertex_attribute_descriptions(&[
-                VertexInputAttributeDescription {
-                    location: 0,
-                    binding: 0,
-                    format: Format::R32G32B32_SFLOAT,
-                    offset: 0
-                },
-                VertexInputAttributeDescription {
-                    location: 1,
-                    binding: 0,
-                    format: Format::R32_SFLOAT,
-                    offset: 12
-                },
-                VertexInputAttributeDescription {
-                    location: 2,
-                    binding: 0,
-                    format: Format::R32_SFLOAT,
-                    offset: 16
-                },
-                VertexInputAttributeDescription {
-                    location: 3,
-                    binding: 0,
-                    format: Format::R32_SFLOAT,
-                    offset: 20
-                },
-            ])
-            .vertex_binding_descriptions(&[VertexInputBindingDescription {
-                binding: 0,
-                stride: 24,
-                input_rate: VertexInputRate::VERTEX
-            }]);
         let input_assembly_state = PipelineInputAssemblyStateCreateInfo::builder()
             .topology(PrimitiveTopology::POINT_LIST);
         let viewports = [ Viewport {
@@ -315,15 +341,7 @@ impl VulkanInstance {
         ];
         let color_blend_state = PipelineColorBlendStateCreateInfo::builder()
             .attachments(&color_blend_attachments);
-        let pipeline_layout = {
-            let create_info = PipelineLayoutCreateInfo::builder()
-                .push_constant_ranges(&[PushConstantRange {
-                    offset: 0,
-                    size: 4,
-                    stage_flags: ShaderStageFlags::VERTEX
-                }]);
-            unsafe { device.create_pipeline_layout(&create_info, None)? }
-        };
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_state, None)? };
         let graphics_pipeline = {
             let create_infos = [ GraphicsPipelineCreateInfo::builder()
                 .stages(&[*vertex_stage, *fragment_stage])

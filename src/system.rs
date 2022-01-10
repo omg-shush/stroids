@@ -1,7 +1,7 @@
 use std::time::Instant;
 use std::slice;
 
-use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, BufferCreateFlags, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, PipelineBindPoint, DescriptorSet, ShaderStageFlags, DeviceSize};
+use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize};
 
 use crate::vulkan_instance::VulkanInstance;
 
@@ -20,7 +20,7 @@ pub struct System {
 }
 
 impl System {
-    pub fn new(vulkan: &mut VulkanInstance) -> System {
+    pub fn new(vulkan: &VulkanInstance) -> System {
         let planets = vec![
             Planet {
                 color: [1.0, 1.0, 0.0],
@@ -68,8 +68,6 @@ impl System {
 
         let (vertex_buffer, device_memory) = unsafe {
             let create_info = BufferCreateInfo::builder()
-                .queue_family_indices(&vulkan.queue_family_indices) // ignored in SharingMode::EXCLUSIVE
-                .flags(BufferCreateFlags::empty())
                 .sharing_mode(SharingMode::EXCLUSIVE)
                 .size(size)
                 .usage(BufferUsageFlags::VERTEX_BUFFER);
@@ -94,8 +92,8 @@ impl System {
             (vertex_buffer, device_memory)
         };
         // Register buffer/memory with vulkan for later cleanup
-        vulkan.buffers.push(vertex_buffer);
-        vulkan.memory.push(device_memory);
+        vulkan.buffers.borrow_mut().push(vertex_buffer);
+        vulkan.memory.borrow_mut().push(device_memory);
         System { start: Instant::now(), planets, vertex_buffer, device_memory }
     }
 
