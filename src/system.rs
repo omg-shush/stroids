@@ -18,7 +18,8 @@ pub struct System {
     vertex_buffer: Buffer,
     device_memory: DeviceMemory,
     uniform_buffers: Vec<Buffer>,
-    uniform_memory: DeviceMemory
+    uniform_memory: DeviceMemory,
+    uniform_offsets: Vec<u64>
 }
 
 impl System {
@@ -95,7 +96,7 @@ impl System {
 
             (vertex_buffer, device_memory)
         };
-        let (uniform_buffers, uniform_memory) = unsafe {
+        let (uniform_buffers, uniform_memory, uniform_offsets) = unsafe {
             let size = 4; // uniform contains 1 float
             let create_info = BufferCreateInfo::builder()
                 .sharing_mode(SharingMode::EXCLUSIVE)
@@ -106,13 +107,13 @@ impl System {
                 let buf = vulkan.device.create_buffer(&create_info, None).expect("Failed to create buffer");
                 uniform_buffers.push(buf);
             }
-            let mut offsets = Vec::new();
+            let mut uniform_offsets = Vec::new();
             let uniform_memory = {
                 let reqs = uniform_buffers.iter().map(|b| vulkan.device.get_buffer_memory_requirements(*b));
                 let mut ptr = 0;
                 for r in reqs {
                     ptr = if ptr == 0 { 0 } else { (((ptr - 1) / r.alignment) + 1) * r.alignment };
-                    offsets.push(ptr);
+                    uniform_offsets.push(ptr);
                     ptr += r.size;
                 }
                 let create_info = MemoryAllocateInfo::builder()
@@ -126,19 +127,19 @@ impl System {
                     bind_infos.push(BindBufferMemoryInfo::builder()
                         .buffer(uniform_buffers[i])
                         .memory(uniform_memory)
-                        .memory_offset(offsets[i])
+                        .memory_offset(uniform_offsets[i])
                         .build());
                 }
                 vulkan.device.bind_buffer_memory2(&bind_infos).expect("Failed to bind uniform buffers");
             };
-            (uniform_buffers, uniform_memory)
+            (uniform_buffers, uniform_memory, uniform_offsets)
         };
         // Register buffer/memory with vulkan for later cleanup
         uniform_buffers.iter().for_each(|b| vulkan.buffers.borrow_mut().push(*b));
         vulkan.buffers.borrow_mut().push(vertex_buffer);
         vulkan.memory.borrow_mut().push(device_memory);
         vulkan.memory.borrow_mut().push(uniform_memory);
-        System { start: Instant::now(), planets, vertex_buffer, device_memory, uniform_buffers, uniform_memory }
+        System { start: Instant::now(), planets, vertex_buffer, device_memory, uniform_buffers, uniform_memory, uniform_offsets }
     }
 
     pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer) {
@@ -151,6 +152,12 @@ impl System {
             //     descriptor_sets,
             //     0);
             let time = (Instant::now() - self.start).as_secs_f32();
+
+            // Update brightness uniform
+            let dst = vulkan.device.map_memory(self.uniform_memory, self.uniform_offsets[vulkan.swapchain_ptr], 4, MemoryMapFlags::empty()).expect("Failed to map memory");
+            *(dst as *mut f32) = 1.0;
+            vulkan.device.unmap_memory(self.uniform_memory);
+
             let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, data);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
