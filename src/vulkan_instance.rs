@@ -5,7 +5,7 @@ use std::ffi::{CString, c_void, NulError};
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo};
+use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
@@ -28,7 +28,7 @@ pub struct VulkanInstance {
     pub swapchain_ptr: usize,
     render_pass: RenderPass,
     framebuffers: Vec<Framebuffer>,
-    descriptor_set_layout: DescriptorSetLayout,
+    pub descriptor_set_layout: DescriptorSetLayout,
     graphics_pipeline: Pipeline,
     pub pipeline_layout: PipelineLayout,
     graphics_pool: CommandPool,
@@ -38,7 +38,8 @@ pub struct VulkanInstance {
     pub semaphore_rendering_finished: Vec<Semaphore>,
     pub fence_draw_ready: Vec<Fence>,
     pub buffers: RefCell<Vec<Buffer>>,
-    pub memory: RefCell<Vec<DeviceMemory>>
+    pub memory: RefCell<Vec<DeviceMemory>>,
+    pub descriptor_pools: RefCell<Vec<DescriptorPool>>
 }
 
 impl Drop for VulkanInstance {
@@ -52,6 +53,7 @@ impl Drop for VulkanInstance {
             self.memory.borrow().iter().for_each(|memory| self.device.free_memory(*memory, None));
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.descriptor_pools.borrow().iter().for_each(|pool| self.device.destroy_descriptor_pool(*pool, None));
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.semaphore_image_available.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
             self.semaphore_rendering_finished.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
@@ -224,7 +226,7 @@ impl VulkanInstance {
             graphics_command_buffers,
             semaphore_image_available, semaphore_rendering_finished,
             fence_draw_ready,
-            buffers: vec![].into(), memory: vec![].into()
+            buffers: vec![].into(), memory: vec![].into(), descriptor_pools: vec![].into()
         })
     }
 

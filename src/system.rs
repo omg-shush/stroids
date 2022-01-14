@@ -1,7 +1,7 @@
 use std::time::Instant;
 use std::slice;
 
-use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, BindBufferMemoryInfo};
+use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, BindBufferMemoryInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, WHOLE_SIZE, PipelineBindPoint};
 
 use crate::vulkan_instance::VulkanInstance;
 
@@ -19,7 +19,8 @@ pub struct System {
     device_memory: DeviceMemory,
     uniform_buffers: Vec<Buffer>,
     uniform_memory: DeviceMemory,
-    uniform_offsets: Vec<u64>
+    uniform_offsets: Vec<u64>,
+    descriptor_sets: Vec<DescriptorSet>
 }
 
 impl System {
@@ -63,6 +64,7 @@ impl System {
             }
         ];
 
+        let swapchain_len = vulkan.swapchain_image_views.len() as u32;
         let memory_type_index = vulkan.get_memory_type_index( // TODO try to get device local too
             MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT).expect("TODO");
 
@@ -103,7 +105,7 @@ impl System {
                 .size(size)
                 .usage(BufferUsageFlags::UNIFORM_BUFFER);
             let mut uniform_buffers = Vec::new();
-            for _ in 0..vulkan.swapchain_image_views.len() {
+            for _ in 0..swapchain_len {
                 let buf = vulkan.device.create_buffer(&create_info, None).expect("Failed to create buffer");
                 uniform_buffers.push(buf);
             }
@@ -139,24 +141,67 @@ impl System {
         vulkan.buffers.borrow_mut().push(vertex_buffer);
         vulkan.memory.borrow_mut().push(device_memory);
         vulkan.memory.borrow_mut().push(uniform_memory);
-        System { start: Instant::now(), planets, vertex_buffer, device_memory, uniform_buffers, uniform_memory, uniform_offsets }
+
+        // Construct descriptor sets to bind uniform buffers
+        let descriptor_pool = unsafe {
+            let pool_sizes = [DescriptorPoolSize {
+                ty: DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: swapchain_len
+            }];
+            let create_info = DescriptorPoolCreateInfo::builder()
+                .max_sets(swapchain_len)
+                .pool_sizes(&pool_sizes);
+            vulkan.device.create_descriptor_pool(&create_info, None).expect("Failed to create descriptor pool")
+        };
+        let descriptor_sets = unsafe {
+            let set_layouts = [vulkan.descriptor_set_layout].repeat(swapchain_len as usize);
+            let create_info = DescriptorSetAllocateInfo::builder()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&set_layouts);
+            vulkan.device.allocate_descriptor_sets(&create_info).expect("Failed to allocate descriptor sets")
+        };
+        // Register descriptor pool with vulkan for later cleanup
+        vulkan.descriptor_pools.borrow_mut().push(descriptor_pool);
+
+        // Attach each uniform buffer to corresponding descriptor set
+        let buffer_descriptors = uniform_buffers.iter().map(|buf| {
+            [DescriptorBufferInfo::builder()
+                .buffer(*buf)
+                .offset(0)
+                .range(4)
+                .build()]
+        }).collect::<Vec<_>>();
+        let descriptor_writes = descriptor_sets.iter().enumerate().map(|(i, set)| {
+            WriteDescriptorSet::builder()
+                .dst_set(*set)
+                .dst_binding(0)
+                .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_descriptors[i])
+                .build()
+        }).collect::<Vec<_>>();
+        unsafe { vulkan.device.update_descriptor_sets(&descriptor_writes, &[]) };
+
+        System { start: Instant::now(), planets, vertex_buffer, device_memory,
+            uniform_buffers, uniform_memory, uniform_offsets, descriptor_sets }
     }
 
     pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer) {
         unsafe {
-            // let descriptor_set = vulkan.device.create_descr
-            // vulkan.device.cmd_bind_descriptor_sets(cmdbuf,
-            //     PipelineBindPoint::GRAPHICS,
-            //     vulkan.pipeline_layout,
-            //     0,
-            //     descriptor_sets,
-            //     0);
             let time = (Instant::now() - self.start).as_secs_f32();
 
             // Update brightness uniform
             let dst = vulkan.device.map_memory(self.uniform_memory, self.uniform_offsets[vulkan.swapchain_ptr], 4, MemoryMapFlags::empty()).expect("Failed to map memory");
-            *(dst as *mut f32) = 1.0;
+            *(dst as *mut f32) = ((time / 8.0).sin() + 1.0) / 2.0;
             vulkan.device.unmap_memory(self.uniform_memory);
+
+            // Bind that uniform's descriptor set
+            vulkan.device.cmd_bind_descriptor_sets(
+                cmdbuf,
+                PipelineBindPoint::GRAPHICS,
+                vulkan.pipeline_layout,
+                0,
+                &[self.descriptor_sets[vulkan.swapchain_ptr]],
+                &[]);
 
             let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, data);
