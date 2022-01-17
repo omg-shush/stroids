@@ -1,14 +1,17 @@
 use std::cell::RefCell;
 use std::error::Error;
 use std::ffi::{CString, c_void, NulError};
+use std::mem::ManuallyDrop;
 
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Buffer, DeviceMemory, Format, Fence, Pipeline, RenderPass, Queue, ImageView, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SwapchainKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, PresentModeKHR, ImageViewCreateInfo, ImageViewType, ImageSubresourceRange, ImageAspectFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Framebuffer, Extent2D, SurfaceCapabilitiesKHR, FramebufferCreateInfo, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, SemaphoreCreateInfo, Semaphore, FenceCreateInfo, FenceCreateFlags, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
+use ash::vk::{Buffer, DeviceMemory, Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
+
+use super::vulkan_swapchain::VulkanSwapchain;
 
 pub struct VulkanInstance {
     instance: Instance,
@@ -20,23 +23,15 @@ pub struct VulkanInstance {
     pub device: Device,
     pub graphics_queue: Queue,
     transfer_queue: Queue,
-    pub queue_family_indices: Vec<u32>, // TODO not pub. really abstract away the queues themselves
     extent: Extent2D,
-    pub swapchain_loader: Swapchain,
-    pub swapchain: SwapchainKHR,
-    pub swapchain_image_views: Vec<ImageView>,
-    pub swapchain_ptr: usize,
+    pub swapchain: ManuallyDrop<VulkanSwapchain>,
     render_pass: RenderPass,
-    framebuffers: Vec<Framebuffer>,
     pub descriptor_set_layout: DescriptorSetLayout,
     graphics_pipeline: Pipeline,
     pub pipeline_layout: PipelineLayout,
     graphics_pool: CommandPool,
     transfer_pool: CommandPool,
     pub graphics_command_buffers: Vec<CommandBuffer>,
-    pub semaphore_image_available: Vec<Semaphore>,
-    pub semaphore_rendering_finished: Vec<Semaphore>,
-    pub fence_draw_ready: Vec<Fence>,
     pub buffers: RefCell<Vec<Buffer>>,
     pub memory: RefCell<Vec<DeviceMemory>>,
     pub descriptor_pools: RefCell<Vec<DescriptorPool>>
@@ -55,13 +50,8 @@ impl Drop for VulkanInstance {
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.descriptor_pools.borrow().iter().for_each(|pool| self.device.destroy_descriptor_pool(*pool, None));
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            self.semaphore_image_available.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
-            self.semaphore_rendering_finished.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
-            self.fence_draw_ready.iter().for_each(|fence| self.device.destroy_fence(*fence, None));
-            self.framebuffers.iter().for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
             self.device.destroy_render_pass(self.render_pass, None);
-            self.swapchain_image_views.iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
-            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
+            ManuallyDrop::drop(&mut self.swapchain);
             self.device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
             self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None);
@@ -134,16 +124,18 @@ impl VulkanInstance {
         let graphics_queue = unsafe { device.get_device_queue(0, 0) };
         let transfer_queue = graphics_queue.clone();
 
-        // Init swapchain
+        // Get presentation info
         let surface_caps = unsafe { surface_loader.get_physical_device_surface_capabilities(card, surface) }?;
         let surface_formats = unsafe { surface_loader.get_physical_device_surface_formats(card, surface) }?;
         // TODO smarter selection of format
         let surface_format = surface_formats.get(0).ok_or("No surface formats available")?;
-        let (swapchain_loader, swapchain, swapchain_image_views) = VulkanInstance::init_swapchain(&surface_loader, &surface, &card, &instance, &device, &surface_caps, surface_format, &queue_family_indices)?;
 
         // Init renderpass
         let render_pass = VulkanInstance::init_renderpass(&device, surface_format)?;
-        let framebuffers = VulkanInstance::init_framebuffers(&device, &render_pass, &swapchain_image_views, surface_caps.current_extent)?;
+
+        // Init swapchain
+        let swapchain = VulkanSwapchain::new(&surface_loader, &surface, &card, &instance, &device, &surface_caps, surface_format, &render_pass,
+            queue_family_indices)?;
 
         // Construct pipeline
         let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
@@ -205,27 +197,17 @@ impl VulkanInstance {
         let command_pools = VulkanInstance::init_command_pools(&device, vec![0, 0])?;
         let graphics_pool = command_pools[0];
         let transfer_pool = command_pools[1];
-        let graphics_command_buffers = VulkanInstance::init_command_buffers(&device, &graphics_pool, swapchain_image_views.len() as u32)?;
-
-        // Init synchronization
-        let semaphore_create_info = SemaphoreCreateInfo::builder();
-        let fence_create_info = FenceCreateInfo::builder()
-            .flags(FenceCreateFlags::SIGNALED);
-        let semaphore_image_available = unsafe { vec![0; swapchain_image_views.len()].into_iter().map(|_| device.create_semaphore(&semaphore_create_info, None)).collect::<Result<Vec<_>, _>>()? };
-        let semaphore_rendering_finished = unsafe { vec![0; swapchain_image_views.len()].into_iter().map(|_| device.create_semaphore(&semaphore_create_info, None)).collect::<Result<Vec<_>, _>>()? };
-        let fence_draw_ready = unsafe { vec![0; swapchain_image_views.len()].into_iter().map(|_| device.create_fence(&fence_create_info, None)).collect::<Result<Vec<_>, _>>()? };
+        let graphics_command_buffers = VulkanInstance::init_command_buffers(&device, &graphics_pool, swapchain.len() as u32)?;
 
         Ok (VulkanInstance {
             instance, debug_utils, debug_utils_messenger,
             surface_loader, surface,
-            card, device, graphics_queue, transfer_queue, queue_family_indices,
-            extent: surface_caps.current_extent, swapchain_loader, swapchain, swapchain_image_views, swapchain_ptr: 0,
-            render_pass, framebuffers,
+            card, device, graphics_queue, transfer_queue,
+            extent: surface_caps.current_extent, swapchain: ManuallyDrop::new(swapchain),
+            render_pass,
             descriptor_set_layout, graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
-            semaphore_image_available, semaphore_rendering_finished,
-            fence_draw_ready,
             buffers: vec![].into(), memory: vec![].into(), descriptor_pools: vec![].into()
         })
     }
@@ -244,7 +226,7 @@ impl VulkanInstance {
 
     // TODO organize this better
     pub fn begin_commands(&self) -> Result<CommandBuffer, Box<dyn Error>> {
-        let cmdbuf = self.graphics_command_buffers[self.swapchain_ptr];
+        let cmdbuf = self.graphics_command_buffers[self.swapchain.index];
         let begin_info = CommandBufferBeginInfo::builder()
             .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe { self.device.begin_command_buffer(cmdbuf, &begin_info)? };
@@ -255,7 +237,7 @@ impl VulkanInstance {
         }];
         let create_info = RenderPassBeginInfo::builder()
             .render_pass(self.render_pass)
-            .framebuffer(self.framebuffers[self.swapchain_ptr])
+            .framebuffer(self.swapchain.framebuffers[self.swapchain.index])
             .render_area(Rect2D {
                 offset: Offset2D { x: 0, y: 0 },
                 extent: self.extent
@@ -370,19 +352,6 @@ impl VulkanInstance {
         Ok ((graphics_pipeline, pipeline_layout))
     }
 
-    fn init_framebuffers(device: &Device, render_pass: &RenderPass, swapchain_image_views: &Vec<ImageView>, extent: Extent2D) -> Result<Vec<Framebuffer>, Box<dyn Error>> {
-        swapchain_image_views.iter().map(|image_view| {
-            let attachments = [*image_view];
-            let create_info = FramebufferCreateInfo::builder()
-                .render_pass(*render_pass)
-                .attachments(&attachments)
-                .width(extent.width)
-                .height(extent.height)
-                .layers(1);
-            unsafe { device.create_framebuffer(&create_info, None) }
-        }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
-    }
-
     fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR) -> Result<RenderPass, Box<dyn Error>> {
         let color_attachment = AttachmentDescription::builder()
             .format(surface_format.format)
@@ -415,51 +384,6 @@ impl VulkanInstance {
             .dependencies(&dependencies);
         let render_pass = unsafe { device.create_render_pass(&create_info, None)? };
         Ok (render_pass)
-    }
-
-    fn init_swapchain(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device, surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, queues: &Vec<u32>) -> Result<(Swapchain, SwapchainKHR, Vec<ImageView>), Box<dyn Error>> {
-        let surface_presents = unsafe { surface_loader.get_physical_device_surface_present_modes(*card, *surface) }?;
-
-        let present_mode = if surface_presents.contains(&PresentModeKHR::FIFO_RELAXED) {
-            PresentModeKHR::FIFO_RELAXED
-        } else {
-            PresentModeKHR::FIFO
-        };
-        let create_info = SwapchainCreateInfoKHR::builder()
-            .surface(*surface)
-            .min_image_count(3.clamp(surface_caps.min_image_count, if surface_caps.max_image_count == 0 { u32::MAX } else { surface_caps.max_image_count }))
-            .image_format(surface_format.format)
-            .image_color_space(surface_format.color_space)
-            .image_extent(surface_caps.current_extent)
-            .image_array_layers(1)
-            .image_usage(ImageUsageFlags::COLOR_ATTACHMENT)
-            .image_sharing_mode(SharingMode::EXCLUSIVE)
-            .queue_family_indices(&queues)
-            .pre_transform(surface_caps.current_transform)
-            .composite_alpha(CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode);
-
-        let swapchain_loader = Swapchain::new(instance, device);
-        let swapchain = unsafe { swapchain_loader.create_swapchain(&create_info, None)? };
-        
-        // Create image views
-        let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain)? };
-        let swapchain_image_views = swapchain_images.iter().map(|image| {
-            let subresource_range = ImageSubresourceRange::builder()
-                .aspect_mask(ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1);
-            let create_info = ImageViewCreateInfo::builder()
-                .image(*image)
-                .view_type(ImageViewType::TYPE_2D)
-                .format(surface_format.format)
-                .subresource_range(*subresource_range);
-            unsafe { device.create_image_view(&create_info, None) }
-        }).collect::<Result<Vec<_>, _>>()?;
-        
-        Ok ((swapchain_loader, swapchain, swapchain_image_views))
     }
 
     fn init_win32(entry: &Entry, instance: &Instance, window: &Window) -> Result<(Surface, SurfaceKHR), Box<dyn Error>> {

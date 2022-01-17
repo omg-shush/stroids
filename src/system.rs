@@ -1,9 +1,9 @@
 use std::time::Instant;
 use std::slice;
 
-use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, BindBufferMemoryInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, WHOLE_SIZE, PipelineBindPoint};
+use ash::vk::{DeviceMemory, CommandBuffer, Buffer, BufferCreateInfo, SharingMode, BufferUsageFlags, MemoryAllocateInfo, MemoryPropertyFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, BindBufferMemoryInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint};
 
-use crate::vulkan_instance::VulkanInstance;
+use crate::vulkan::vulkan_instance::VulkanInstance;
 
 pub struct Planet {
     color: [f32; 3],
@@ -64,7 +64,6 @@ impl System {
             }
         ];
 
-        let swapchain_len = vulkan.swapchain_image_views.len() as u32;
         let memory_type_index = vulkan.get_memory_type_index( // TODO try to get device local too
             MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT).expect("TODO");
 
@@ -105,7 +104,7 @@ impl System {
                 .size(size)
                 .usage(BufferUsageFlags::UNIFORM_BUFFER);
             let mut uniform_buffers = Vec::new();
-            for _ in 0..swapchain_len {
+            for _ in 0..vulkan.swapchain.len() {
                 let buf = vulkan.device.create_buffer(&create_info, None).expect("Failed to create buffer");
                 uniform_buffers.push(buf);
             }
@@ -146,15 +145,15 @@ impl System {
         let descriptor_pool = unsafe {
             let pool_sizes = [DescriptorPoolSize {
                 ty: DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: swapchain_len
+                descriptor_count: vulkan.swapchain.len() as u32
             }];
             let create_info = DescriptorPoolCreateInfo::builder()
-                .max_sets(swapchain_len)
+                .max_sets(vulkan.swapchain.len() as u32)
                 .pool_sizes(&pool_sizes);
             vulkan.device.create_descriptor_pool(&create_info, None).expect("Failed to create descriptor pool")
         };
         let descriptor_sets = unsafe {
-            let set_layouts = [vulkan.descriptor_set_layout].repeat(swapchain_len as usize);
+            let set_layouts = [vulkan.descriptor_set_layout].repeat(vulkan.swapchain.len());
             let create_info = DescriptorSetAllocateInfo::builder()
                 .descriptor_pool(descriptor_pool)
                 .set_layouts(&set_layouts);
@@ -190,7 +189,7 @@ impl System {
             let time = (Instant::now() - self.start).as_secs_f32();
 
             // Update brightness uniform
-            let dst = vulkan.device.map_memory(self.uniform_memory, self.uniform_offsets[vulkan.swapchain_ptr], 4, MemoryMapFlags::empty()).expect("Failed to map memory");
+            let dst = vulkan.device.map_memory(self.uniform_memory, self.uniform_offsets[vulkan.swapchain.index], 4, MemoryMapFlags::empty()).expect("Failed to map memory");
             *(dst as *mut f32) = ((time / 8.0).sin() + 1.0) / 2.0;
             vulkan.device.unmap_memory(self.uniform_memory);
 
@@ -200,7 +199,7 @@ impl System {
                 PipelineBindPoint::GRAPHICS,
                 vulkan.pipeline_layout,
                 0,
-                &[self.descriptor_sets[vulkan.swapchain_ptr]],
+                &[self.descriptor_sets[vulkan.swapchain.index]],
                 &[]);
 
             let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);

@@ -1,14 +1,14 @@
 use std::error::Error;
 
 use asteroid::{Asteroid, AsteroidType};
-use vulkan_instance::VulkanInstance;
+use vulkan::vulkan_instance::VulkanInstance;
 use app::App;
 use system::System;
 
 mod asteroid;
 mod region;
 mod production;
-mod vulkan_instance;
+mod vulkan;
 mod app;
 mod system;
 
