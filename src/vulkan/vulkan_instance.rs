@@ -6,12 +6,13 @@ use std::mem::ManuallyDrop;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Win32Surface, Swapchain};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Buffer, DeviceMemory, Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, MemoryPropertyFlags, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
+use ash::vk::{Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, Win32SurfaceCreateInfoKHR, SurfaceKHR, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineVertexInputStateCreateInfo, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, PipelineLayoutCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
 use vk_shader_macros::include_glsl;
 use winit::platform::windows::WindowExtWindows;
 use winit::window::Window;
 
 use super::vulkan_swapchain::VulkanSwapchain;
+use super::vulkan_allocator::VulkanAllocator;
 
 pub struct VulkanInstance {
     instance: Instance,
@@ -19,7 +20,6 @@ pub struct VulkanInstance {
     debug_utils_messenger: DebugUtilsMessengerEXT,
     surface_loader: Surface,
     surface: SurfaceKHR,
-    card: PhysicalDevice,
     pub device: Device,
     pub graphics_queue: Queue,
     transfer_queue: Queue,
@@ -32,8 +32,7 @@ pub struct VulkanInstance {
     graphics_pool: CommandPool,
     transfer_pool: CommandPool,
     pub graphics_command_buffers: Vec<CommandBuffer>,
-    pub buffers: RefCell<Vec<Buffer>>,
-    pub memory: RefCell<Vec<DeviceMemory>>,
+    pub allocator: ManuallyDrop<VulkanAllocator>,
     pub descriptor_pools: RefCell<Vec<DescriptorPool>>
 }
 
@@ -44,8 +43,7 @@ impl Drop for VulkanInstance {
 
             self.device.destroy_command_pool(self.graphics_pool, None);
             self.device.destroy_command_pool(self.transfer_pool, None);
-            self.buffers.borrow().iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
-            self.memory.borrow().iter().for_each(|memory| self.device.free_memory(*memory, None));
+            ManuallyDrop::drop(&mut self.allocator);
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.descriptor_pools.borrow().iter().for_each(|pool| self.device.destroy_descriptor_pool(*pool, None));
@@ -137,6 +135,9 @@ impl VulkanInstance {
         let swapchain = VulkanSwapchain::new(&surface_loader, &surface, &card, &instance, &device, &surface_caps, surface_format, &render_pass,
             queue_family_indices)?;
 
+        // Init device memory allocator
+        let allocator = VulkanAllocator::new(&instance, &card, &device)?;
+
         // Construct pipeline
         let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
             .vertex_attribute_descriptions(&[
@@ -202,26 +203,14 @@ impl VulkanInstance {
         Ok (VulkanInstance {
             instance, debug_utils, debug_utils_messenger,
             surface_loader, surface,
-            card, device, graphics_queue, transfer_queue,
+            device, graphics_queue, transfer_queue,
             extent: surface_caps.current_extent, swapchain: ManuallyDrop::new(swapchain),
             render_pass,
             descriptor_set_layout, graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
-            buffers: vec![].into(), memory: vec![].into(), descriptor_pools: vec![].into()
+            allocator: ManuallyDrop::new(allocator), descriptor_pools: vec![].into()
         })
-    }
-
-    // TODO memory allocator class?
-    pub fn get_memory_type_index(&self, required_properties: MemoryPropertyFlags) -> Result<u32, Box<dyn Error>> {
-        let memory_properties = unsafe { self.instance.get_physical_device_memory_properties(self.card) };
-        for i in 0..memory_properties.memory_type_count {
-            let memory_type = memory_properties.memory_types[i as usize];
-            if memory_type.property_flags.contains(required_properties) {
-                return Ok (i);
-            }
-        }
-        Err ("Could not find memory type with required properties".into())
     }
 
     // TODO organize this better
