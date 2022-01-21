@@ -1,8 +1,10 @@
 use std::error::Error;
 
-use ash::extensions::khr::{Swapchain, Surface};
+use ash::extensions::khr::Swapchain;
 use ash::{Device, Instance};
-use ash::vk::{Queue, RenderPass, PhysicalDevice, Semaphore, Fence, SwapchainKHR, ImageView, Framebuffer, SemaphoreCreateInfo, FenceCreateInfo, FenceCreateFlags, Extent2D, SurfaceKHR, SurfaceCapabilitiesKHR, SurfaceFormatKHR, PresentModeKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, ImageSubresourceRange, ImageAspectFlags, ImageViewCreateInfo, ImageViewType, FramebufferCreateInfo, PresentInfoKHR};
+use ash::vk::{Queue, RenderPass, PhysicalDevice, Semaphore, Fence, SwapchainKHR, ImageView, Framebuffer, SemaphoreCreateInfo, FenceCreateInfo, FenceCreateFlags, Extent2D, SurfaceCapabilitiesKHR, SurfaceFormatKHR, PresentModeKHR, SwapchainCreateInfoKHR, ImageUsageFlags, SharingMode, CompositeAlphaFlagsKHR, ImageSubresourceRange, ImageAspectFlags, ImageViewCreateInfo, ImageViewType, FramebufferCreateInfo, PresentInfoKHR};
+
+use super::vulkan_surface::VulkanSurface;
 
 pub struct VulkanSwapchain {
     device: Device,
@@ -30,12 +32,12 @@ impl Drop for VulkanSwapchain {
 }
 
 impl VulkanSwapchain {
-    pub fn new(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device,
+    pub fn new(surface: &VulkanSurface, card: &PhysicalDevice, instance: &Instance, device: &Device,
             surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, render_pass: &RenderPass, queue_family_indices: Vec<u32>)
             -> Result<VulkanSwapchain, Box<dyn Error>> {
         // Construct swapchain images
         let (loader, swapchain, image_views) = VulkanSwapchain::init_swapchain(
-            &surface_loader, &surface, &card, &instance, &device, &surface_caps, surface_format, &queue_family_indices)?;
+            &surface, &card, &instance, &device, &surface_caps, surface_format, &queue_family_indices)?;
         let last_index = image_views.len() - 1;
 
         // Connect renderpass and swapchain
@@ -101,10 +103,10 @@ impl VulkanSwapchain {
         self.image_views.len()
     }
 
-    fn init_swapchain(surface_loader: &Surface, surface: &SurfaceKHR, card: &PhysicalDevice, instance: &Instance, device: &Device,
+    fn init_swapchain(surface: &VulkanSurface, card: &PhysicalDevice, instance: &Instance, device: &Device,
             surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, queues: &Vec<u32>)
             -> Result<(Swapchain, SwapchainKHR, Vec<ImageView>), Box<dyn Error>> {
-        let surface_presents = unsafe { surface_loader.get_physical_device_surface_present_modes(*card, *surface) }?;
+        let surface_presents = surface.get_physical_device_surface_present_modes(*card)?;
 
         let present_mode = if surface_presents.contains(&PresentModeKHR::FIFO_RELAXED) {
             PresentModeKHR::FIFO_RELAXED
@@ -112,7 +114,7 @@ impl VulkanSwapchain {
             PresentModeKHR::FIFO
         };
         let create_info = SwapchainCreateInfoKHR::builder()
-            .surface(*surface)
+            .surface(surface.surface)
             .min_image_count(3.clamp(surface_caps.min_image_count, if surface_caps.max_image_count == 0 { u32::MAX } else { surface_caps.max_image_count }))
             .image_format(surface_format.format)
             .image_color_space(surface_format.color_space)
