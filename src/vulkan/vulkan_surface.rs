@@ -1,7 +1,6 @@
 // Platform-specific surface initialization
 
 use std::error::Error;
-use std::ffi::c_void;
 
 use ash::{Entry, Instance};
 use ash::vk::{self, SurfaceFormatKHR, PresentModeKHR};
@@ -51,6 +50,7 @@ impl VulkanSurface {
 
 #[cfg(windows)]
 fn create_surface(entry: &Entry, instance: &Instance, window: &Window) -> Result<SurfaceKHR, Box<dyn Error>> {
+    use ash::vk::Win32SurfaceCreateInfoKHR;
     use winit::platform::windows::WindowExtWindows;
     use ash::extensions::khr::Win32Surface;
 
@@ -64,6 +64,8 @@ fn create_surface(entry: &Entry, instance: &Instance, window: &Window) -> Result
 
 #[cfg(unix)]
 fn create_surface(entry: &Entry, instance: &Instance, window: &Window) -> Result<SurfaceKHR, Box<dyn Error>> {
+    use std::ffi::c_void;
+    
     use winit::platform::unix::WindowExtUnix;
     use ash::{extensions::khr::XlibSurface, vk::{XlibSurfaceCreateInfoKHR, Window}};
 
