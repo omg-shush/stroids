@@ -39,7 +39,7 @@ impl VulkanPipeline {
             .module(fragment_module)
             .name(&shader_entry);
         let input_assembly_state = PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(PrimitiveTopology::POINT_LIST);
+            .topology(PrimitiveTopology::TRIANGLE_LIST);
         let viewports = [ Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -58,7 +58,7 @@ impl VulkanPipeline {
         let rasterization_state = PipelineRasterizationStateCreateInfo::builder()
             .line_width(1.0)
             .front_face(FrontFace::CLOCKWISE)
-            .cull_mode(CullModeFlags::NONE)
+            .cull_mode(CullModeFlags::BACK)
             .polygon_mode(PolygonMode::FILL);
         let multisample_state = PipelineMultisampleStateCreateInfo::builder()
             .rasterization_samples(SampleCountFlags::TYPE_1);

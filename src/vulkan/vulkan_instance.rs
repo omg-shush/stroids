@@ -148,27 +148,23 @@ impl VulkanInstance {
                 VertexInputAttributeDescription {
                     location: 1,
                     binding: 0,
-                    format: Format::R32_SFLOAT,
+                    format: Format::R32G32B32_SFLOAT,
                     offset: 12
                 },
                 VertexInputAttributeDescription {
                     location: 2,
                     binding: 0,
-                    format: Format::R32_SFLOAT,
-                    offset: 16
-                },
-                VertexInputAttributeDescription {
-                    location: 3,
-                    binding: 0,
-                    format: Format::R32_SFLOAT,
-                    offset: 20
-                },
+                    format: Format::R32G32_SFLOAT,
+                    offset: 24
+                }
             ])
-            .vertex_binding_descriptions(&[VertexInputBindingDescription {
-                binding: 0,
-                stride: 24,
-                input_rate: VertexInputRate::VERTEX
-            }]);
+            .vertex_binding_descriptions(&[
+                VertexInputBindingDescription {
+                    binding: 0,
+                    stride: 32,
+                    input_rate: VertexInputRate::VERTEX
+                }
+            ]);
         let descriptor_bindings = [DescriptorSetLayoutBinding::builder()
             .binding(0)
             .descriptor_type(DescriptorType::UNIFORM_BUFFER)
@@ -185,7 +181,7 @@ impl VulkanInstance {
         let pipeline_layout_state = PipelineLayoutCreateInfo::builder()
             .push_constant_ranges(&[PushConstantRange {
                 offset: 0,
-                size: 4,
+                size: 4 * 4 * 4,
                 stage_flags: ShaderStageFlags::VERTEX
             }])
             .set_layouts(&descriptor_set_layouts);

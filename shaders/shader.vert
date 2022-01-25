@@ -1,18 +1,18 @@
 #version 450
 
-layout (location = 0) in vec3 color;
-layout (location = 1) in float radius;
-layout (location = 2) in float orbit;
-layout (location = 3) in float year;
+layout (location = 0) in vec3 position;
+layout (location = 1) in vec3 normal;
+layout (location = 2) in vec2 uv;
 
-layout (push_constant) uniform UniversalTime {
-    float time;
-} ut;
+layout (push_constant) uniform PushConstants {
+    mat4 vp;
+} pc;
 
-layout (location = 0) out vec3 fragColor;
+layout (location = 0) out vec3 fragNormal;
+layout (location = 1) out vec2 fragUv;
 
 void main() {
-    fragColor = color;
-    gl_PointSize = radius;
-    gl_Position = vec4(orbit * cos(ut.time / year + orbit), orbit * sin(ut.time / year + orbit), 0.0, 1.0);
+    fragNormal = normal;
+    fragUv = uv;
+    gl_Position = pc.vp * vec4(position, 1.0);
 }

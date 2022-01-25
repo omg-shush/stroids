@@ -1,9 +1,13 @@
+use std::fs::File;
+use std::io::BufReader;
 use std::time::Instant;
 use std::slice;
 use std::error::Error;
 use std::mem::size_of;
 
-use ash::vk::{CommandBuffer, Buffer, BufferUsageFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint};
+use ash::vk::{CommandBuffer, Buffer, BufferUsageFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint, IndexType};
+use nalgebra::{Rotation3, Scale3, Perspective3, Translation3, Vector3};
+use obj::{load_obj, Obj, Vertex, TexturedVertex};
 
 use crate::vulkan::vulkan_instance::VulkanInstance;
 use crate::vulkan::vulkan_allocator::Allocation;
@@ -19,6 +23,8 @@ pub struct System {
     start: Instant,
     planets: Vec<Planet>,
     vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    index_count: u32,
     uniform_allocations: Vec<Allocation>,
     descriptor_sets: Vec<DescriptorSet>
 }
@@ -64,18 +70,40 @@ impl System {
             }
         ];
 
-        let data = planets.iter()
-            .map(|p| [p.color[0], p.color[1], p.color[2], p.radius, p.orbit, p.year])
-            .flatten()
-            .collect::<Vec<_>>();
-        let size = (data.len() * 4) as DeviceSize;
+        let file = BufReader::new(File::open("res/sphere.obj")?);
+        let wall: Obj<TexturedVertex> = load_obj(file)?; // TODO TexturedVertex
+        // let data = planets.iter()
+        //     .map(|p| [
+        //         [0.0, 0.0, 0.0, p.color[0], p.color[1], p.color[2]],
+        //         [1.0, 0.0, 0.0, p.color[0], p.color[1], p.color[2]],
+        //         [1.0, 1.0, 0.0, p.color[0], p.color[1], p.color[2]],
+        //         [1.0, 1.0, 0.0, p.color[0], p.color[1], p.color[2]],
+        //         [0.0, 1.0, 0.0, p.color[0], p.color[1], p.color[2]],
+        //         [0.0, 0.0, 0.0, p.color[0], p.color[1], p.color[2]]
+        //     ]).flatten()
+        //     .flatten()
+        //     .collect::<Vec<_>>();
+        // let size = (data.len() * 4) as DeviceSize;
 
         // Allocate & write vertex buffer
+        let vertices = wall.vertices.iter().map(|v| {
+            let mut vec = [v.position, v.normal].concat();
+            vec.extend_from_slice(&v.texture[..2]);
+            vec
+        }).flatten().collect::<Vec<_>>();
         let (vertex_buffer, _vertex_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(BufferUsageFlags::VERTEX_BUFFER, size)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size,
-                MemoryMapFlags::empty())?;
-            (dst as *mut f32).copy_from_nonoverlapping(data.as_ptr(), data.len());
+            let (buffer, allocation) = vulkan.allocator.allocate_buffer(BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
+            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
+            (dst as *mut f32).copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
+            vulkan.device.unmap_memory(allocation.memory);
+            (buffer, allocation)
+        };
+
+        // Allocate & write index buffer
+        let (index_buffer, _index_allocation) = unsafe {
+            let (buffer, allocation) = vulkan.allocator.allocate_buffer(BufferUsageFlags::INDEX_BUFFER, (wall.indices.len() * 2) as u64)?;
+            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
+            (dst as *mut u16).copy_from_nonoverlapping(wall.indices.as_ptr(), wall.indices.len());
             vulkan.device.unmap_memory(allocation.memory);
             (buffer, allocation)
         };
@@ -123,7 +151,7 @@ impl System {
         }).collect::<Vec<_>>();
         unsafe { vulkan.device.update_descriptor_sets(&descriptor_writes, &[]) };
 
-        Ok (System { start: Instant::now(), planets, vertex_buffer, uniform_allocations, descriptor_sets })
+        Ok (System { start: Instant::now(), planets, vertex_buffer, index_buffer, index_count: wall.indices.len() as u32, uniform_allocations, descriptor_sets })
     }
 
     // TODO return result?
@@ -146,10 +174,25 @@ impl System {
                 &[self.descriptor_sets[vulkan.swapchain.index]],
                 &[]);
 
-            let data = slice::from_raw_parts([time].as_ptr() as *const u8, 4);
+            // Push constants
+            let view = {
+                let t = Translation3::from([0.0, 0.0, -2.0]);
+                let dir = Vector3::from([time.sin(), 0.0, -1.0]);
+                let r = Rotation3::look_at_rh(&dir, &Vector3::from([0.0, 1.0, 0.0]));
+                let s = Scale3::identity();
+                r.to_homogeneous() * s.to_homogeneous() * t.to_homogeneous()
+            };
+            let projection = {
+                Perspective3::new(1080.0 / 720.2, 90f32.to_radians(), 0.1, 100.0).to_homogeneous()
+            };
+            let vp = projection * view;
+            let data = slice::from_raw_parts(vp.as_ptr() as *const u8, 4 * 4 * 4); // 4x4 f32 matrix
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, data);
+
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
-            vulkan.device.cmd_draw(cmdbuf, self.planets.len() as u32, 1, 0, 0);
+            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.index_buffer, 0, IndexType::UINT16);
+            // vulkan.device.cmd_draw(cmdbuf, self.planets.len() as u32, 1, 0, 0);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.index_count, 1, 0, 0, 0);
         };
     }
 }
