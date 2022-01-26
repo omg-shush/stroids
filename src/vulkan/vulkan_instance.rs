@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain, Win32Surface, XlibSurface};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderStageFlags, PipelineVertexInputStateCreateInfo, Rect2D, Offset2D, PipelineLayoutCreateInfo, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool, ImageCreateInfo, Extent3D, ImageUsageFlags, ImageSubresourceRange, ImageAspectFlags, ImageViewType, ImageViewCreateInfo, ImageType};
+use ash::vk::{Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderStageFlags, PipelineVertexInputStateCreateInfo, Rect2D, Offset2D, PipelineLayoutCreateInfo, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool, ImageCreateInfo, Extent3D, ImageUsageFlags, ImageSubresourceRange, ImageAspectFlags, ImageViewType, ImageViewCreateInfo, ImageType, ClearDepthStencilValue};
 use winit::window::Window;
 
 use super::vulkan_pipeline::VulkanPipeline;
@@ -186,12 +186,47 @@ impl VulkanInstance {
             image_view
         };
 
+        // Init depth image
+        let depth_format = Format::D32_SFLOAT;
+        let depth_image = {
+            let create_info = ImageCreateInfo::builder()
+                .array_layers(1)
+                .extent(Extent3D {
+                    width: surface_caps.current_extent.width,
+                    height: surface_caps.current_extent.height,
+                    depth: 1
+                })
+                .format(depth_format)
+                .image_type(ImageType::TYPE_2D)
+                .mip_levels(1)
+                .samples(msaa_count)
+                .usage(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT);
+            allocator.allocate_image(&create_info)?
+        };
+        let depth_image_view = unsafe {
+            let subresource_range = ImageSubresourceRange {
+                aspect_mask: ImageAspectFlags::DEPTH,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1
+            };
+            let create_info = ImageViewCreateInfo::builder()
+                .image(depth_image)
+                .view_type(ImageViewType::TYPE_2D)
+                .format(depth_format)
+                .subresource_range(subresource_range);
+            let image_view = device.create_image_view(&create_info, None)?;
+            allocator.image_views.borrow_mut().push(image_view);
+            image_view
+        };
+
         // Init renderpass
-        let render_pass = VulkanInstance::init_renderpass(&device, &surface_format, msaa_count)?;
+        let render_pass = VulkanInstance::init_renderpass(&device, &surface_format, msaa_count, depth_format)?;
 
         // Init swapchain
         let swapchain = VulkanSwapchain::new(&surface, &card, &instance, &device, &surface_caps, &surface_format, &render_pass,
-            queue_family_indices.to_vec(), &msaa_image_view)?;
+            queue_family_indices.to_vec(), &msaa_image_view, &depth_image_view)?;
 
         // Construct pipeline
         let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
@@ -284,11 +319,16 @@ impl VulkanInstance {
         let begin_info = CommandBufferBeginInfo::builder()
             .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe { self.device.begin_command_buffer(cmdbuf, &begin_info)? };
-        let clear_values = [ClearValue {
-            color: ClearColorValue {
+        let clear_values = [
+            ClearValue { color: ClearColorValue { // msaa color attachment
                 float32: [0.0, 0.0, 0.00, 1.0]
-            }
-        }];
+            } },
+            ClearValue::default(), // swapchain attachment
+            ClearValue { depth_stencil: ClearDepthStencilValue { // depth attachment
+                depth: 1.0,
+                stencil: 0
+            } }
+        ];
         let create_info = RenderPassBeginInfo::builder()
             .render_pass(self.render_pass)
             .framebuffer(self.swapchain.framebuffers[self.swapchain.index])
@@ -320,7 +360,7 @@ impl VulkanInstance {
         }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
     }
 
-    fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR, msaa_count: SampleCountFlags) -> Result<RenderPass, Box<dyn Error>> {
+    fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR, msaa_count: SampleCountFlags, depth_format: Format) -> Result<RenderPass, Box<dyn Error>> {
         let color_attachment = AttachmentDescription::builder()
             .format(surface_format.format)
             .load_op(AttachmentLoadOp::CLEAR)
@@ -335,27 +375,40 @@ impl VulkanInstance {
             .initial_layout(ImageLayout::UNDEFINED)
             .final_layout(ImageLayout::PRESENT_SRC_KHR)
             .samples(SampleCountFlags::TYPE_1);
-        let attachments = [*color_attachment, *resolve_attachment];
+        let depth_attachment = AttachmentDescription::builder()
+            .format(depth_format)
+            .load_op(AttachmentLoadOp::CLEAR)
+            .store_op(AttachmentStoreOp::DONT_CARE)
+            .stencil_load_op(AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(AttachmentStoreOp::DONT_CARE)
+            .initial_layout(ImageLayout::UNDEFINED)
+            .final_layout(ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .samples(msaa_count);
+        let attachments = [*color_attachment, *resolve_attachment, *depth_attachment];
         let color_attachment_reference = AttachmentReference::builder()
             .attachment(0)
             .layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
         let resolve_attachment_reference = AttachmentReference::builder()
             .attachment(1)
             .layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let depth_attachment_reference = AttachmentReference::builder()
+            .attachment(2)
+            .layout(ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         let color_attachment_references = [*color_attachment_reference];
         let resolve_attachment_references = [*resolve_attachment_reference];
         let subpass = SubpassDescription::builder()
             .color_attachments(&color_attachment_references)
             .resolve_attachments(&resolve_attachment_references)
+            .depth_stencil_attachment(&depth_attachment_reference)
             .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
         let subpasses = [*subpass];
 
         let subpass_dependency = SubpassDependency::builder()
             .src_subpass(SUBPASS_EXTERNAL)
-            .src_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | PipelineStageFlags::EARLY_FRAGMENT_TESTS)
             .dst_subpass(0)
-            .dst_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(AccessFlags::COLOR_ATTACHMENT_READ | AccessFlags::COLOR_ATTACHMENT_WRITE);
+            .dst_stage_mask(PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | PipelineStageFlags::EARLY_FRAGMENT_TESTS)
+            .dst_access_mask(AccessFlags::COLOR_ATTACHMENT_READ | AccessFlags::COLOR_ATTACHMENT_WRITE | AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE);
         let dependencies = [*subpass_dependency];
 
         let create_info = RenderPassCreateInfo::builder()

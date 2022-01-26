@@ -33,7 +33,8 @@ impl Drop for VulkanSwapchain {
 
 impl VulkanSwapchain {
     pub fn new(surface: &VulkanSurface, card: &PhysicalDevice, instance: &Instance, device: &Device,
-            surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, render_pass: &RenderPass, queue_family_indices: Vec<u32>, msaa_image_view: &ImageView)
+            surface_caps: &SurfaceCapabilitiesKHR, surface_format: &SurfaceFormatKHR, render_pass: &RenderPass, queue_family_indices: Vec<u32>,
+            msaa_image_view: &ImageView, depth_image_view: &ImageView)
             -> Result<VulkanSwapchain, Box<dyn Error>> {
         // Construct swapchain images
         let (loader, swapchain, image_views) = VulkanSwapchain::init_swapchain(
@@ -41,7 +42,7 @@ impl VulkanSwapchain {
         let last_index = image_views.len() - 1;
 
         // Connect renderpass and swapchain
-        let framebuffers = VulkanSwapchain::init_framebuffers(&device, &render_pass, &image_views, surface_caps.current_extent, msaa_image_view)?;
+        let framebuffers = VulkanSwapchain::init_framebuffers(&device, &render_pass, &image_views, surface_caps.current_extent, msaa_image_view, depth_image_view)?;
 
         // Init synchronization
         let semaphore_create_info = SemaphoreCreateInfo::builder();
@@ -150,10 +151,10 @@ impl VulkanSwapchain {
         Ok ((swapchain_loader, swapchain, swapchain_image_views))
     }
 
-    fn init_framebuffers(device: &Device, render_pass: &RenderPass, swapchain_image_views: &Vec<ImageView>, extent: Extent2D, msaa_image_view: &ImageView)
+    fn init_framebuffers(device: &Device, render_pass: &RenderPass, swapchain_image_views: &Vec<ImageView>, extent: Extent2D, msaa_image_view: &ImageView, depth_image_view: &ImageView)
             -> Result<Vec<Framebuffer>, Box<dyn Error>> {
         swapchain_image_views.iter().map(|swapchain_image_view| {
-            let attachments = [*msaa_image_view, *swapchain_image_view];
+            let attachments = [*msaa_image_view, *swapchain_image_view, *depth_image_view];
             let create_info = FramebufferCreateInfo::builder()
                 .render_pass(*render_pass)
                 .attachments(&attachments)

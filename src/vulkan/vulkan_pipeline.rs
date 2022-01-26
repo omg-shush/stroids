@@ -2,7 +2,7 @@ use std::error::Error;
 use std::ffi::CString;
 
 use ash::Device;
-use ash::vk::{Extent2D, RenderPass, PipelineVertexInputStateCreateInfo, PipelineLayoutCreateInfo, Pipeline, PipelineLayout, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, SampleCountFlags, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, GraphicsPipelineCreateInfo, PipelineCache};
+use ash::vk::{Extent2D, RenderPass, PipelineVertexInputStateCreateInfo, PipelineLayoutCreateInfo, Pipeline, PipelineLayout, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, SampleCountFlags, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineDepthStencilStateCreateInfo, CompareOp};
 use vk_shader_macros::include_glsl;
 
 pub struct VulkanPipeline {
@@ -75,6 +75,12 @@ impl VulkanPipeline {
         ];
         let color_blend_state = PipelineColorBlendStateCreateInfo::builder()
             .attachments(&color_blend_attachments);
+        let depth_stencil_state = PipelineDepthStencilStateCreateInfo::builder()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(CompareOp::LESS)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
         let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_state, None)? };
         let graphics_pipeline = {
             let create_infos = [ GraphicsPipelineCreateInfo::builder()
@@ -85,6 +91,7 @@ impl VulkanPipeline {
                 .rasterization_state(&rasterization_state)
                 .multisample_state(&multisample_state)
                 .color_blend_state(&color_blend_state)
+                .depth_stencil_state(&depth_stencil_state)
                 .layout(pipeline_layout)
                 .render_pass(*render_pass)
                 .subpass(0)
