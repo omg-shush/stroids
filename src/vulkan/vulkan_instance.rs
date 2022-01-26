@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain, Win32Surface, XlibSurface};
 use ash::{vk, Entry, Instance, Device};
-use ash::vk::{Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderStageFlags, PipelineVertexInputStateCreateInfo, Rect2D, Offset2D, PipelineLayoutCreateInfo, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool};
+use ash::vk::{Format, Pipeline, RenderPass, Queue, PhysicalDevice, PhysicalDeviceType, DeviceCreateInfo, DebugUtilsMessageSeverityFlagsEXT, DebugUtilsMessageTypeFlagsEXT, DebugUtilsMessengerCallbackDataEXT, Bool32, DeviceQueueCreateInfo, ApplicationInfo, InstanceCreateInfo, DebugUtilsMessengerCreateInfoEXT, DebugUtilsMessengerEXT, QueueFlags, SurfaceFormatKHR, AttachmentDescription, AttachmentLoadOp, AttachmentStoreOp, ImageLayout, SampleCountFlags, AttachmentReference, SubpassDescription, PipelineBindPoint, SubpassDependency, SUBPASS_EXTERNAL, PipelineStageFlags, AccessFlags, RenderPassCreateInfo, Extent2D, ShaderStageFlags, PipelineVertexInputStateCreateInfo, Rect2D, Offset2D, PipelineLayoutCreateInfo, PipelineLayout, CommandPool, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferUsageFlags, ClearValue, ClearColorValue, RenderPassBeginInfo, SubpassContents, VertexInputAttributeDescription, VertexInputBindingDescription, VertexInputRate, PushConstantRange, DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorType, DescriptorSetLayoutCreateInfo, DescriptorPool, ImageCreateInfo, Extent3D, ImageUsageFlags, ImageSubresourceRange, ImageAspectFlags, ImageViewType, ImageViewCreateInfo, ImageType};
 use winit::window::Window;
 
 use super::vulkan_pipeline::VulkanPipeline;
@@ -121,23 +121,77 @@ impl VulkanInstance {
         let surface = VulkanSurface::new(&entry, &instance, &window)?;
 
         // Init device & queues
-        let (card, device, queue_family_indices) = VulkanInstance::select_device(&instance,&surface, &layers)?;
+        let (card, device, queue_family_indices) = VulkanInstance::select_device(&instance, &surface, &layers)?;
+        let msaa_count = {
+            let limits = unsafe { instance.get_physical_device_properties(card).limits };
+            let bits = limits.framebuffer_color_sample_counts & limits.framebuffer_depth_sample_counts;
+            [
+                SampleCountFlags::TYPE_64,
+                SampleCountFlags::TYPE_32,
+                SampleCountFlags::TYPE_16,
+                SampleCountFlags::TYPE_8,
+                SampleCountFlags::TYPE_4,
+                SampleCountFlags::TYPE_2,
+                SampleCountFlags::TYPE_1
+            ].into_iter().find_map(|count| {
+                if bits & count != SampleCountFlags::empty() {
+                    Some (count)
+                } else {
+                    None
+                }
+            }).unwrap()
+        };
+        dbg!(msaa_count);
         let graphics_queue = unsafe { device.get_device_queue(0, 0) };
         let transfer_queue = graphics_queue.clone();
+
+        // Init device memory allocator
+        let allocator = VulkanAllocator::new(&instance, &card, &device)?;
 
         // Get presentation info
         let surface_caps = surface.get_physical_device_surface_capabilities(card)?;
         let surface_format = surface.get_physical_device_surface_format(card)?;
 
+        // Init msaa image
+        let msaa_image = {
+            let create_info = ImageCreateInfo::builder()
+                .array_layers(1)
+                .extent(Extent3D {
+                    width: surface_caps.current_extent.width,
+                    height: surface_caps.current_extent.height,
+                    depth: 1
+                })
+                .format(surface_format.format)
+                .image_type(ImageType::TYPE_2D)
+                .mip_levels(1)
+                .samples(msaa_count)
+                .usage(ImageUsageFlags::TRANSIENT_ATTACHMENT | ImageUsageFlags::COLOR_ATTACHMENT);
+            allocator.allocate_image(&create_info)?
+        };
+        let msaa_image_view = unsafe {
+            let subresource_range = ImageSubresourceRange {
+                aspect_mask: ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1
+            };
+            let create_info = ImageViewCreateInfo::builder()
+                .image(msaa_image)
+                .view_type(ImageViewType::TYPE_2D)
+                .format(surface_format.format)
+                .subresource_range(subresource_range);
+            let image_view = device.create_image_view(&create_info, None)?;
+            allocator.image_views.borrow_mut().push(image_view);
+            image_view
+        };
+
         // Init renderpass
-        let render_pass = VulkanInstance::init_renderpass(&device, &surface_format)?;
+        let render_pass = VulkanInstance::init_renderpass(&device, &surface_format, msaa_count)?;
 
         // Init swapchain
         let swapchain = VulkanSwapchain::new(&surface, &card, &instance, &device, &surface_caps, &surface_format, &render_pass,
-            queue_family_indices.to_vec())?;
-
-        // Init device memory allocator
-        let allocator = VulkanAllocator::new(&instance, &card, &device)?;
+            queue_family_indices.to_vec(), &msaa_image_view)?;
 
         // Construct pipeline
         let vertex_input_state = PipelineVertexInputStateCreateInfo::builder()
@@ -202,7 +256,7 @@ impl VulkanInstance {
                 stage_flags: ShaderStageFlags::VERTEX
             }])
             .set_layouts(&descriptor_set_layouts);
-        let (graphics_pipeline, pipeline_layout) = VulkanPipeline::new(&device, surface_caps.current_extent, &render_pass,
+        let (graphics_pipeline, pipeline_layout) = VulkanPipeline::new(&device, surface_caps.current_extent, &render_pass, msaa_count,
             *vertex_input_state, *pipeline_layout_state)?;
 
         // Create command buffers
@@ -266,21 +320,33 @@ impl VulkanInstance {
         }).collect::<Result<Vec<_>, _>>().map_err(|e| Box::new(e) as Box<dyn Error>)
     }
 
-    fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR) -> Result<RenderPass, Box<dyn Error>> {
+    fn init_renderpass(device: &Device, surface_format: &SurfaceFormatKHR, msaa_count: SampleCountFlags) -> Result<RenderPass, Box<dyn Error>> {
         let color_attachment = AttachmentDescription::builder()
             .format(surface_format.format)
             .load_op(AttachmentLoadOp::CLEAR)
             .store_op(AttachmentStoreOp::STORE)
             .initial_layout(ImageLayout::UNDEFINED)
+            .final_layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .samples(msaa_count);
+        let resolve_attachment = AttachmentDescription::builder()
+            .format(surface_format.format)
+            .load_op(AttachmentLoadOp::DONT_CARE)
+            .store_op(AttachmentStoreOp::STORE)
+            .initial_layout(ImageLayout::UNDEFINED)
             .final_layout(ImageLayout::PRESENT_SRC_KHR)
             .samples(SampleCountFlags::TYPE_1);
-        let attachments = [*color_attachment];
+        let attachments = [*color_attachment, *resolve_attachment];
         let color_attachment_reference = AttachmentReference::builder()
             .attachment(0)
             .layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let resolve_attachment_reference = AttachmentReference::builder()
+            .attachment(1)
+            .layout(ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
         let color_attachment_references = [*color_attachment_reference];
+        let resolve_attachment_references = [*resolve_attachment_reference];
         let subpass = SubpassDescription::builder()
             .color_attachments(&color_attachment_references)
+            .resolve_attachments(&resolve_attachment_references)
             .pipeline_bind_point(PipelineBindPoint::GRAPHICS);
         let subpasses = [*subpass];
 

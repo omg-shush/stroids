@@ -16,7 +16,7 @@ pub struct VulkanPipeline {
  * 
  */
 impl VulkanPipeline {
-    pub fn new(device: &Device, extent: Extent2D, render_pass: &RenderPass,
+    pub fn new(device: &Device, extent: Extent2D, render_pass: &RenderPass, msaa_count: SampleCountFlags,
         vertex_input_state: PipelineVertexInputStateCreateInfo,
         pipeline_layout_state: PipelineLayoutCreateInfo) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
         let vertex_module = {
@@ -61,7 +61,7 @@ impl VulkanPipeline {
             .cull_mode(CullModeFlags::BACK)
             .polygon_mode(PolygonMode::FILL);
         let multisample_state = PipelineMultisampleStateCreateInfo::builder()
-            .rasterization_samples(SampleCountFlags::TYPE_1);
+            .rasterization_samples(msaa_count);
         let color_blend_attachments = [ PipelineColorBlendAttachmentState::builder()
             .blend_enable(true)
             .src_color_blend_factor(BlendFactor::SRC_ALPHA)
