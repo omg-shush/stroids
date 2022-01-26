@@ -2,17 +2,21 @@ use std::cell::RefCell;
 use std::error::Error;
 
 use ash::{Device, Instance};
-use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo};
+use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler};
 
 pub struct VulkanAllocator {
     device: Device,
     memory_properties: PhysicalDeviceMemoryProperties,
     buffers: RefCell<Vec<Buffer>>,
+    images: RefCell<Vec<Image>>,
+    pub image_views: RefCell<Vec<ImageView>>, // TODO this and samplers should be somewhere better
+    pub samplers: RefCell<Vec<Sampler>>,
     device_allocations: RefCell<Vec<DeviceAllocation>>
 }
 
 struct DeviceAllocation {
     pub memory: DeviceMemory,
+    pub index: u32,
     pub size: DeviceSize,
     pub free_offset: DeviceSize
 }
@@ -27,6 +31,9 @@ impl Drop for VulkanAllocator {
     fn drop(&mut self) {
         unsafe {
             self.buffers.borrow().iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
+            self.samplers.borrow().iter().for_each(|sampler| self.device.destroy_sampler(*sampler, None));
+            self.image_views.borrow().iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
+            self.images.borrow().iter().for_each(|image| self.device.destroy_image(*image, None));
             self.device_allocations.borrow().iter().for_each(|alloc| self.device.free_memory(alloc.memory, None));
         }
     }
@@ -36,7 +43,7 @@ impl VulkanAllocator {
     pub fn new(instance: &Instance, card: &PhysicalDevice, device: &Device) -> Result<VulkanAllocator, Box<dyn Error>> {
         let memory_properties = unsafe { instance.get_physical_device_memory_properties(*card) };
         Ok (VulkanAllocator {
-            device: device.clone(), memory_properties, buffers: vec![].into(), device_allocations: vec![].into()
+            device: device.clone(), memory_properties, buffers: vec![].into(), images: vec![].into(), image_views: vec![].into(), samplers: vec![].into(), device_allocations: vec![].into()
         })
     }
 
@@ -49,7 +56,9 @@ impl VulkanAllocator {
         }
     }
 
-    fn allocate_memory(&self, size: DeviceSize, alignment: DeviceSize) -> Result<Allocation, Box<dyn Error>> {
+    pub fn allocate_memory(&self, reqs: MemoryRequirements, props: MemoryPropertyFlags) -> Result<Allocation, Box<dyn Error>> {
+        let size = reqs.size;
+        let alignment = reqs.alignment;
         let mut device_allocations = self.device_allocations.borrow_mut();
 
         // Search for a device allocation with enough free space
@@ -57,15 +66,15 @@ impl VulkanAllocator {
         let next_allocation_index = device_allocations.len();
         let device_allocation_index = device_allocations.iter_mut()
             .position(|da| {
-                da.size - VulkanAllocator::align_up(da.free_offset, alignment) >= size
+                ((1 << da.index) & reqs.memory_type_bits > 0) && (da.size - VulkanAllocator::align_up(da.free_offset, alignment) >= size)
             }).unwrap_or_else(|| {
                 let device_size = size.max(1 << 27);
-                let memory_type_index = self.get_memory_type_index(MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT).expect("Failed to find appropriate device memory");
+                let memory_type_index = self.get_memory_type_index(props, reqs.memory_type_bits).expect("Failed to find appropriate device memory");
                 let create_info = MemoryAllocateInfo::builder()
                     .allocation_size(device_size)
                     .memory_type_index(memory_type_index);
                 let memory = unsafe { self.device.allocate_memory(&create_info, None).expect("Failed to allocate device memory") };
-                let new_alloc = DeviceAllocation { memory, size: device_size, free_offset: 0 };
+                let new_alloc = DeviceAllocation { memory, index: memory_type_index, size: device_size, free_offset: 0 };
                 device_allocations.push(new_alloc);
                 next_allocation_index
             });
@@ -87,7 +96,7 @@ impl VulkanAllocator {
                 .usage(usage);
             let buffer = self.device.create_buffer(&create_info, None)?;
             let reqs = self.device.get_buffer_memory_requirements(buffer);
-            let allocation = self.allocate_memory(reqs.size, reqs.alignment)?;
+            let allocation = self.allocate_memory(reqs, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT)?;
             self.device.bind_buffer_memory(buffer, allocation.memory, allocation.offset)?;
             self.buffers.borrow_mut().push(buffer);
             Ok ((buffer, allocation))
@@ -109,7 +118,7 @@ impl VulkanAllocator {
             let allocations = {
                 buffers.iter()
                     .map(|b| self.device.get_buffer_memory_requirements(*b))
-                    .map(|r| self.allocate_memory(r.size, r.alignment))
+                    .map(|r| self.allocate_memory(r, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT))
                     .collect::<Result<Vec<_>, _>>()?
             };
             { // bind each buffer to a region in the device memory
@@ -128,10 +137,20 @@ impl VulkanAllocator {
         }
     }
 
-    fn get_memory_type_index(&self, required_properties: MemoryPropertyFlags) -> Result<u32, Box<dyn Error>> {
+    pub fn allocate_image(&self, create_info: &ImageCreateInfo) -> Result<Image, Box<dyn Error>> {
+        let image = unsafe { self.device.create_image(create_info, None)? };
+        self.images.borrow_mut().push(image);
+        let reqs = unsafe { self.device.get_image_memory_requirements(image) };
+        let allocation = self.allocate_memory(reqs, MemoryPropertyFlags::empty())?;
+        unsafe { self.device.bind_image_memory(image, allocation.memory, allocation.offset)? };
+        Ok (image)
+    }
+
+    fn get_memory_type_index(&self, required_properties: MemoryPropertyFlags, valid_types: u32) -> Result<u32, Box<dyn Error>> {
         for i in 0..self.memory_properties.memory_type_count {
+            let is_valid = ((1 << i) & valid_types) > 0;
             let memory_type = self.memory_properties.memory_types[i as usize];
-            if memory_type.property_flags.contains(required_properties) {
+            if is_valid && memory_type.property_flags.contains(required_properties) {
                 return Ok (i);
             }
         }

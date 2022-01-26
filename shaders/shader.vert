@@ -8,10 +8,12 @@ layout (push_constant) uniform PushConstants {
     mat4 vp;
 } pc;
 
-layout (location = 0) out vec3 fragNormal;
-layout (location = 1) out vec2 fragUv;
+layout (location = 0) out vec3 fragPosition;
+layout (location = 1) out vec3 fragNormal;
+layout (location = 2) out vec2 fragUv;
 
 void main() {
+    fragPosition = position;
     fragNormal = normal;
     fragUv = uv;
     gl_Position = pc.vp * vec4(position, 1.0);

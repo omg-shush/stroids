@@ -22,10 +22,12 @@ pub struct VulkanInstance {
     pub device: Device,
     pub graphics_queue: Queue,
     transfer_queue: Queue,
+    pub queue_indices: Vec<u32>,
     extent: Extent2D,
     pub swapchain: ManuallyDrop<VulkanSwapchain>,
     render_pass: RenderPass,
     pub descriptor_set_layout: DescriptorSetLayout,
+    pub image_descriptor_set_layout: DescriptorSetLayout,
     graphics_pipeline: Pipeline,
     pub pipeline_layout: PipelineLayout,
     graphics_pool: CommandPool,
@@ -47,6 +49,7 @@ impl Drop for VulkanInstance {
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.descriptor_pools.borrow().iter().for_each(|pool| self.device.destroy_descriptor_pool(*pool, None));
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.destroy_descriptor_set_layout(self.image_descriptor_set_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
             ManuallyDrop::drop(&mut self.swapchain);
             self.device.destroy_device(None);
@@ -131,7 +134,7 @@ impl VulkanInstance {
 
         // Init swapchain
         let swapchain = VulkanSwapchain::new(&surface, &card, &instance, &device, &surface_caps, &surface_format, &render_pass,
-            queue_family_indices)?;
+            queue_family_indices.to_vec())?;
 
         // Init device memory allocator
         let allocator = VulkanAllocator::new(&instance, &card, &device)?;
@@ -165,19 +168,33 @@ impl VulkanInstance {
                     input_rate: VertexInputRate::VERTEX
                 }
             ]);
-        let descriptor_bindings = [DescriptorSetLayoutBinding::builder()
-            .binding(0)
-            .descriptor_type(DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(ShaderStageFlags::FRAGMENT)
-            .build()
-        ];
         let descriptor_set_layout = {
+            let descriptor_bindings = [
+                DescriptorSetLayoutBinding::builder()
+                    .binding(0)
+                    .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(ShaderStageFlags::FRAGMENT)
+                    .build()
+            ];
             let create_info = DescriptorSetLayoutCreateInfo::builder()
                 .bindings(&descriptor_bindings);
             unsafe { device.create_descriptor_set_layout(&create_info, None)? }
         };
-        let descriptor_set_layouts = [descriptor_set_layout];
+        let image_descriptor_set_layout = {
+            let bindings = [
+                DescriptorSetLayoutBinding::builder()
+                .binding(0)
+                .descriptor_type(DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(ShaderStageFlags::FRAGMENT)
+                .build()
+            ];
+            let create_info = DescriptorSetLayoutCreateInfo::builder()
+                .bindings(&bindings);
+            unsafe { device.create_descriptor_set_layout(&create_info, None)? }
+        };
+        let descriptor_set_layouts = [descriptor_set_layout, image_descriptor_set_layout];
         let pipeline_layout_state = PipelineLayoutCreateInfo::builder()
             .push_constant_ranges(&[PushConstantRange {
                 offset: 0,
@@ -197,10 +214,10 @@ impl VulkanInstance {
         Ok (VulkanInstance {
             instance, debug_utils, debug_utils_messenger,
             surface: ManuallyDrop::new(surface),
-            device, graphics_queue, transfer_queue,
+            device, graphics_queue, transfer_queue, queue_indices: queue_family_indices,
             extent: surface_caps.current_extent, swapchain: ManuallyDrop::new(swapchain),
             render_pass,
-            descriptor_set_layout, graphics_pipeline, pipeline_layout,
+            descriptor_set_layout, image_descriptor_set_layout, graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
             allocator: ManuallyDrop::new(allocator), descriptor_pools: vec![].into()
@@ -215,7 +232,7 @@ impl VulkanInstance {
         unsafe { self.device.begin_command_buffer(cmdbuf, &begin_info)? };
         let clear_values = [ClearValue {
             color: ClearColorValue {
-                float32: [0.0, 0.0, 0.08, 1.0]
+                float32: [0.0, 0.0, 0.00, 1.0]
             }
         }];
         let create_info = RenderPassBeginInfo::builder()
