@@ -47,7 +47,7 @@ impl App {
                     *control = ControlFlow::Exit;
                 },
                 Event::RedrawRequested(_) => {
-                    vulkan.swapchain.acquire();
+                    vulkan.swapchain.acquire(&vulkan.device);
 
                     // Rewrite command buffer
                     let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");

@@ -70,7 +70,7 @@ impl VulkanPipeline {
             .src_alpha_blend_factor(BlendFactor::SRC_ALPHA)
             .dst_alpha_blend_factor(BlendFactor::ONE_MINUS_SRC_ALPHA)
             .alpha_blend_op(BlendOp::ADD)
-            .color_write_mask(ColorComponentFlags::all())
+            .color_write_mask(ColorComponentFlags::RGBA)
             .build()
         ];
         let color_blend_state = PipelineColorBlendStateCreateInfo::builder()

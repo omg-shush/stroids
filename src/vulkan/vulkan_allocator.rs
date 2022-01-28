@@ -5,7 +5,6 @@ use ash::{Device, Instance};
 use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler};
 
 pub struct VulkanAllocator {
-    device: Device,
     memory_properties: PhysicalDeviceMemoryProperties,
     buffers: RefCell<Vec<Buffer>>,
     images: RefCell<Vec<Image>>,
@@ -27,24 +26,22 @@ pub struct Allocation {
     pub size: DeviceSize
 }
 
-impl Drop for VulkanAllocator {
-    fn drop(&mut self) {
-        unsafe {
-            self.buffers.borrow().iter().for_each(|buffer| self.device.destroy_buffer(*buffer, None));
-            self.samplers.borrow().iter().for_each(|sampler| self.device.destroy_sampler(*sampler, None));
-            self.image_views.borrow().iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
-            self.images.borrow().iter().for_each(|image| self.device.destroy_image(*image, None));
-            self.device_allocations.borrow().iter().for_each(|alloc| self.device.free_memory(alloc.memory, None));
-        }
-    }
-}
-
 impl VulkanAllocator {
-    pub fn new(instance: &Instance, card: &PhysicalDevice, device: &Device) -> Result<VulkanAllocator, Box<dyn Error>> {
+    pub fn new(instance: &Instance, card: &PhysicalDevice) -> Result<VulkanAllocator, Box<dyn Error>> {
         let memory_properties = unsafe { instance.get_physical_device_memory_properties(*card) };
         Ok (VulkanAllocator {
-            device: device.clone(), memory_properties, buffers: vec![].into(), images: vec![].into(), image_views: vec![].into(), samplers: vec![].into(), device_allocations: vec![].into()
+            memory_properties, buffers: vec![].into(), images: vec![].into(), image_views: vec![].into(), samplers: vec![].into(), device_allocations: vec![].into()
         })
+    }
+
+    pub fn drop(&self, device: &Device) {
+        unsafe {
+            self.buffers.borrow().iter().for_each(|buffer| device.destroy_buffer(*buffer, None));
+            self.samplers.borrow().iter().for_each(|sampler| device.destroy_sampler(*sampler, None));
+            self.image_views.borrow().iter().for_each(|image_view| device.destroy_image_view(*image_view, None));
+            self.images.borrow().iter().for_each(|image| device.destroy_image(*image, None));
+            self.device_allocations.borrow().iter().for_each(|alloc| device.free_memory(alloc.memory, None));
+        }
     }
 
     // Returns the given ptr rounded up to the next multiple of the given alignment
@@ -56,7 +53,7 @@ impl VulkanAllocator {
         }
     }
 
-    pub fn allocate_memory(&self, reqs: MemoryRequirements, props: MemoryPropertyFlags) -> Result<Allocation, Box<dyn Error>> {
+    pub fn allocate_memory(&self, device: &Device, reqs: MemoryRequirements, props: MemoryPropertyFlags) -> Result<Allocation, Box<dyn Error>> {
         let size = reqs.size;
         let alignment = reqs.alignment;
         let mut device_allocations = self.device_allocations.borrow_mut();
@@ -73,7 +70,7 @@ impl VulkanAllocator {
                 let create_info = MemoryAllocateInfo::builder()
                     .allocation_size(device_size)
                     .memory_type_index(memory_type_index);
-                let memory = unsafe { self.device.allocate_memory(&create_info, None).expect("Failed to allocate device memory") };
+                let memory = unsafe { device.allocate_memory(&create_info, None).expect("Failed to allocate device memory") };
                 let new_alloc = DeviceAllocation { memory, index: memory_type_index, size: device_size, free_offset: 0 };
                 device_allocations.push(new_alloc);
                 next_allocation_index
@@ -88,23 +85,23 @@ impl VulkanAllocator {
 
     // Constructs a single buffer, allocates device memory, and binds the two together
     // Tracks the buffer for later cleanup. TODO create some sort of "memory pool" so certain memory can be freed mid-execution
-    pub fn allocate_buffer(&self, usage: BufferUsageFlags, size: DeviceSize) -> Result<(Buffer, Allocation), Box<dyn Error>> {
+    pub fn allocate_buffer(&self, device: &Device, usage: BufferUsageFlags, size: DeviceSize) -> Result<(Buffer, Allocation), Box<dyn Error>> {
         unsafe {
             let create_info = BufferCreateInfo::builder()
                 .sharing_mode(SharingMode::EXCLUSIVE)
                 .size(size as u64)
                 .usage(usage);
-            let buffer = self.device.create_buffer(&create_info, None)?;
-            let reqs = self.device.get_buffer_memory_requirements(buffer);
-            let allocation = self.allocate_memory(reqs, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT)?;
-            self.device.bind_buffer_memory(buffer, allocation.memory, allocation.offset)?;
+            let buffer = device.create_buffer(&create_info, None)?;
+            let reqs = device.get_buffer_memory_requirements(buffer);
+            let allocation = self.allocate_memory(device, reqs, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT)?;
+            device.bind_buffer_memory(buffer, allocation.memory, allocation.offset)?;
             self.buffers.borrow_mut().push(buffer);
             Ok ((buffer, allocation))
         }
     }
 
     // Allocates a ring of identical buffers of the given count, each with the given size
-    pub fn allocate_buffer_chain(&self, usage: BufferUsageFlags, size: DeviceSize, count: usize) -> Result<(Vec<Buffer>, Vec<Allocation>), Box<dyn Error>> {
+    pub fn allocate_buffer_chain(&self, device: &Device, usage: BufferUsageFlags, size: DeviceSize, count: usize) -> Result<(Vec<Buffer>, Vec<Allocation>), Box<dyn Error>> {
         unsafe {
             let create_info = BufferCreateInfo::builder()
                 .sharing_mode(SharingMode::EXCLUSIVE)
@@ -112,13 +109,13 @@ impl VulkanAllocator {
                 .usage(usage);
             let mut buffers = Vec::new();
             for _ in 0..count {
-                let buf = self.device.create_buffer(&create_info, None)?;
+                let buf = device.create_buffer(&create_info, None)?;
                 buffers.push(buf);
             }
             let allocations = {
                 buffers.iter()
-                    .map(|b| self.device.get_buffer_memory_requirements(*b))
-                    .map(|r| self.allocate_memory(r, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT))
+                    .map(|b| device.get_buffer_memory_requirements(*b))
+                    .map(|r| self.allocate_memory(device, r, MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT))
                     .collect::<Result<Vec<_>, _>>()?
             };
             { // bind each buffer to a region in the device memory
@@ -130,19 +127,19 @@ impl VulkanAllocator {
                         .memory_offset(allocations[i].offset)
                         .build());
                 }
-                self.device.bind_buffer_memory2(&bind_infos)?;
+                device.bind_buffer_memory2(&bind_infos)?;
             };
             self.buffers.borrow_mut().append(&mut buffers.to_vec());
             Ok ((buffers, allocations))
         }
     }
 
-    pub fn allocate_image(&self, create_info: &ImageCreateInfo) -> Result<Image, Box<dyn Error>> {
-        let image = unsafe { self.device.create_image(create_info, None)? };
+    pub fn allocate_image(&self, device: &Device, create_info: &ImageCreateInfo) -> Result<Image, Box<dyn Error>> {
+        let image = unsafe { device.create_image(create_info, None)? };
         self.images.borrow_mut().push(image);
-        let reqs = unsafe { self.device.get_image_memory_requirements(image) };
-        let allocation = self.allocate_memory(reqs, MemoryPropertyFlags::empty())?;
-        unsafe { self.device.bind_image_memory(image, allocation.memory, allocation.offset)? };
+        let reqs = unsafe { device.get_image_memory_requirements(image) };
+        let allocation = self.allocate_memory(device, reqs, MemoryPropertyFlags::empty())?;
+        unsafe { device.bind_image_memory(image, allocation.memory, allocation.offset)? };
         Ok (image)
     }
 

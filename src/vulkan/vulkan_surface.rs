@@ -5,7 +5,7 @@ use std::error::Error;
 use ash::{Entry, Instance};
 use ash::vk::{self, SurfaceFormatKHR, PresentModeKHR};
 use ash::vk::{PhysicalDevice, SurfaceKHR, SurfaceCapabilitiesKHR};
-use ash::extensions::khr::Surface;
+use ash::extensions::khr::{Surface};
 use winit::window::Window;
 
 pub struct VulkanSurface {
@@ -23,10 +23,9 @@ impl Drop for VulkanSurface {
 
 impl VulkanSurface {
     pub fn new(entry: &Entry, instance: &Instance, window: &Window) -> Result<VulkanSurface, Box<dyn Error>> {
-        Ok (VulkanSurface {
-            loader: Surface::new(&entry, &instance),
-            surface: create_surface(entry, instance, window)?
-        })
+        let surface = create_surface(entry, instance, window)?;
+        let loader = Surface::new(entry, instance);
+        Ok (VulkanSurface { loader, surface })
     }
 
     pub fn get_physical_device_surface_support(&self, card: PhysicalDevice, i: u32) -> bool {

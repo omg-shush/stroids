@@ -15,6 +15,7 @@ use super::vulkan_allocator::VulkanAllocator;
 use super::vulkan_surface::VulkanSurface;
 
 pub struct VulkanInstance {
+    entry: Entry,
     instance: Instance,
     debug_utils: DebugUtils,
     debug_utils_messenger: DebugUtilsMessengerEXT,
@@ -24,7 +25,7 @@ pub struct VulkanInstance {
     transfer_queue: Queue,
     pub queue_indices: Vec<u32>,
     extent: Extent2D,
-    pub swapchain: ManuallyDrop<VulkanSwapchain>,
+    pub swapchain: VulkanSwapchain,
     render_pass: RenderPass,
     pub descriptor_set_layout: DescriptorSetLayout,
     pub image_descriptor_set_layout: DescriptorSetLayout,
@@ -33,7 +34,7 @@ pub struct VulkanInstance {
     graphics_pool: CommandPool,
     transfer_pool: CommandPool,
     pub graphics_command_buffers: Vec<CommandBuffer>,
-    pub allocator: ManuallyDrop<VulkanAllocator>,
+    pub allocator: VulkanAllocator,
     pub descriptor_pools: RefCell<Vec<DescriptorPool>>
 }
 
@@ -44,14 +45,14 @@ impl Drop for VulkanInstance {
 
             self.device.destroy_command_pool(self.graphics_pool, None);
             self.device.destroy_command_pool(self.transfer_pool, None);
-            ManuallyDrop::drop(&mut self.allocator);
+            self.allocator.drop(&self.device);
             self.device.destroy_pipeline(self.graphics_pipeline, None);
             self.device.destroy_pipeline_layout(self.pipeline_layout, None);
             self.descriptor_pools.borrow().iter().for_each(|pool| self.device.destroy_descriptor_pool(*pool, None));
             self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
             self.device.destroy_descriptor_set_layout(self.image_descriptor_set_layout, None);
             self.device.destroy_render_pass(self.render_pass, None);
-            ManuallyDrop::drop(&mut self.swapchain);
+            self.swapchain.drop(&self.device);
             self.device.destroy_device(None);
             ManuallyDrop::drop(&mut self.surface);
             self.debug_utils.destroy_debug_utils_messenger(self.debug_utils_messenger, None);
@@ -75,13 +76,13 @@ unsafe extern "system" fn debug_utils_callback(
 
 impl VulkanInstance {
     pub fn new(window: &Window) -> Result<VulkanInstance, Box<dyn Error>> {
-        let entry = unsafe { Entry::new() }?;
+        let entry = unsafe { Entry::load() }?;
 
         // Describe application
         let app_name = CString::new("'Stroids")?;
         let engine_name = CString::new("Astral Engine")?;
         let app_info = ApplicationInfo::builder()
-            .api_version(vk::make_api_version(0, 1, 1, 0))
+            .api_version(vk::make_api_version(0, 1, 2, 0))
             .application_version(vk::make_api_version(0, 0, 1, 0))
             .application_name(&app_name)
             .engine_version(vk::make_api_version(0, 0, 1, 0))
@@ -98,13 +99,17 @@ impl VulkanInstance {
             DebugUtils::name().to_owned()
         ];
         let extensions = desired_extensions.iter().filter(|e| supported_extensions.contains(e)).map(|e| e.as_ptr()).collect::<Vec<_>>();
-        let layer_names = vec!["VK_LAYER_KHRONOS_validation"].into_iter().map(|s| CString::new(s)).collect::<Result<Vec<_>, NulError>>()?;
+        let layer_names = if cfg!(debug_assertions) {
+            vec!["VK_LAYER_KHRONOS_validation"].into_iter().map(|s| CString::new(s)).collect::<Result<Vec<_>, NulError>>()?
+        } else {
+            vec![]
+        };
         let layers = layer_names.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
         
         // Construct instance
         let mut debug_create_info = DebugUtilsMessengerCreateInfoEXT::builder()
             .message_severity(DebugUtilsMessageSeverityFlagsEXT::WARNING | DebugUtilsMessageSeverityFlagsEXT::ERROR)
-            .message_type(DebugUtilsMessageTypeFlagsEXT::all())
+            .message_type(DebugUtilsMessageTypeFlagsEXT::GENERAL | DebugUtilsMessageTypeFlagsEXT::PERFORMANCE | DebugUtilsMessageTypeFlagsEXT::VALIDATION)
             .pfn_user_callback(Some (debug_utils_callback));
         let create_info = InstanceCreateInfo::builder()
             .application_info(&app_info)
@@ -143,10 +148,10 @@ impl VulkanInstance {
         };
         dbg!(msaa_count);
         let graphics_queue = unsafe { device.get_device_queue(0, 0) };
-        let transfer_queue = graphics_queue.clone();
+        let transfer_queue = unsafe { std::mem::zeroed() };
 
         // Init device memory allocator
-        let allocator = VulkanAllocator::new(&instance, &card, &device)?;
+        let allocator = VulkanAllocator::new(&instance, &card)?;
 
         // Get presentation info
         let surface_caps = surface.get_physical_device_surface_capabilities(card)?;
@@ -166,7 +171,7 @@ impl VulkanInstance {
                 .mip_levels(1)
                 .samples(msaa_count)
                 .usage(ImageUsageFlags::TRANSIENT_ATTACHMENT | ImageUsageFlags::COLOR_ATTACHMENT);
-            allocator.allocate_image(&create_info)?
+            allocator.allocate_image(&device, &create_info)?
         };
         let msaa_image_view = unsafe {
             let subresource_range = ImageSubresourceRange {
@@ -201,7 +206,7 @@ impl VulkanInstance {
                 .mip_levels(1)
                 .samples(msaa_count)
                 .usage(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT);
-            allocator.allocate_image(&create_info)?
+            allocator.allocate_image(&device, &create_info)?
         };
         let depth_image_view = unsafe {
             let subresource_range = ImageSubresourceRange {
@@ -301,15 +306,15 @@ impl VulkanInstance {
         let graphics_command_buffers = VulkanInstance::init_command_buffers(&device, &graphics_pool, swapchain.len() as u32)?;
 
         Ok (VulkanInstance {
-            instance, debug_utils, debug_utils_messenger,
+            entry, instance, debug_utils, debug_utils_messenger,
             surface: ManuallyDrop::new(surface),
             device, graphics_queue, transfer_queue, queue_indices: queue_family_indices,
-            extent: surface_caps.current_extent, swapchain: ManuallyDrop::new(swapchain),
+            extent: surface_caps.current_extent, swapchain,
             render_pass,
             descriptor_set_layout, image_descriptor_set_layout, graphics_pipeline, pipeline_layout,
             graphics_pool, transfer_pool,
             graphics_command_buffers,
-            allocator: ManuallyDrop::new(allocator), descriptor_pools: vec![].into()
+            allocator, descriptor_pools: vec![].into()
         })
     }
 

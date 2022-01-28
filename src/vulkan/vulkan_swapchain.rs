@@ -7,7 +7,6 @@ use ash::vk::{Queue, RenderPass, PhysicalDevice, Semaphore, Fence, SwapchainKHR,
 use super::vulkan_surface::VulkanSurface;
 
 pub struct VulkanSwapchain {
-    device: Device,
     loader: Swapchain,
     pub swapchain: SwapchainKHR,
     image_views: Vec<ImageView>,
@@ -16,19 +15,6 @@ pub struct VulkanSwapchain {
     pub semaphore_rendering_finished: Vec<Semaphore>,
     pub fence_resources_ready: Vec<Fence>,
     pub index: usize, // Current image index in swapchain, ranging 0 to (image_views.len() - 1)
-}
-
-impl Drop for VulkanSwapchain {
-    fn drop(&mut self) {
-        unsafe {
-            self.image_views.iter().for_each(|image_view| self.device.destroy_image_view(*image_view, None));
-            self.loader.destroy_swapchain(self.swapchain, None);
-            self.semaphore_image_available.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
-            self.semaphore_rendering_finished.iter().for_each(|semaphore| self.device.destroy_semaphore(*semaphore, None));
-            self.fence_resources_ready.iter().for_each(|fence| self.device.destroy_fence(*fence, None));
-            self.framebuffers.iter().for_each(|framebuffer| self.device.destroy_framebuffer(*framebuffer, None));
-        }
-    }
 }
 
 impl VulkanSwapchain {
@@ -53,13 +39,24 @@ impl VulkanSwapchain {
         let fence_draw_ready = unsafe { vec![0; image_views.len()].into_iter().map(|_| device.create_fence(&fence_create_info, None)).collect::<Result<Vec<_>, _>>()? };
     
         Ok (VulkanSwapchain {
-            device: device.clone(), loader, swapchain, image_views, framebuffers, semaphore_image_available, semaphore_rendering_finished, fence_resources_ready: fence_draw_ready,
+            loader, swapchain, image_views, framebuffers, semaphore_image_available, semaphore_rendering_finished, fence_resources_ready: fence_draw_ready,
             index: last_index // Init to last index, so next index will be 0
         })
     }
 
+    pub fn drop(&self, device: &Device) {
+        unsafe {
+            self.image_views.iter().for_each(|image_view| device.destroy_image_view(*image_view, None));
+            self.loader.destroy_swapchain(self.swapchain, None);
+            self.semaphore_image_available.iter().for_each(|semaphore| device.destroy_semaphore(*semaphore, None));
+            self.semaphore_rendering_finished.iter().for_each(|semaphore| device.destroy_semaphore(*semaphore, None));
+            self.fence_resources_ready.iter().for_each(|fence| device.destroy_fence(*fence, None));
+            self.framebuffers.iter().for_each(|framebuffer| device.destroy_framebuffer(*framebuffer, None));
+        }
+    }
+
     // Acquires the next swapchain image, updating the current image index and waiting for the image to be ready
-    pub fn acquire(&mut self) {
+    pub fn acquire(&mut self, device: &Device) {
         let next_index = (self.index + 1) % self.len();
         let (index, _suboptimal) = unsafe {
             self.loader.acquire_next_image(
@@ -72,11 +69,11 @@ impl VulkanSwapchain {
 
         // Wait till the GPU is done with the image
         unsafe {
-            self.device.wait_for_fences(&[
+            device.wait_for_fences(&[
                 self.fence_resources_ready[self.index]
             ], true, u64::MAX).expect("Waiting for fences");
             // Now guaranteed that this image's command buffer has been consumed and reset
-            self.device.reset_fences(&[
+            device.reset_fences(&[
                 self.fence_resources_ready[self.index]
             ]).expect("Resetting fences");
         }

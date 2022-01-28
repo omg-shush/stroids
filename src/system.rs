@@ -88,7 +88,7 @@ impl System {
         // let size = (data.len() * 4) as DeviceSize;
 
         // Load texture
-        let texture = Texture::new(&vulkan, "res/1k_venus_surface.png")?;
+        let texture = Texture::new(&vulkan, "res/2k_mercury.jpg")?;
 
         // Allocate & write vertex buffer
         let vertices = wall.vertices.iter().map(|v| {
@@ -97,7 +97,7 @@ impl System {
             vec
         }).flatten().collect::<Vec<_>>();
         let (vertex_buffer, _vertex_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
+            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
             let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
             (dst as *mut f32).copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
             vulkan.device.unmap_memory(allocation.memory);
@@ -106,7 +106,7 @@ impl System {
 
         // Allocate & write index buffer
         let (index_buffer, _index_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(BufferUsageFlags::INDEX_BUFFER, (wall.indices.len() * 2) as u64)?;
+            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::INDEX_BUFFER, (wall.indices.len() * 2) as u64)?;
             let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
             (dst as *mut u16).copy_from_nonoverlapping(wall.indices.as_ptr(), wall.indices.len());
             vulkan.device.unmap_memory(allocation.memory);
@@ -115,7 +115,7 @@ impl System {
 
         // Allocate uniform buffers
         let (uniform_buffers, uniform_allocations) = vulkan.allocator.allocate_buffer_chain(
-            BufferUsageFlags::UNIFORM_BUFFER, size_of::<f32>() as DeviceSize, vulkan.swapchain.len())?;
+            &vulkan.device, BufferUsageFlags::UNIFORM_BUFFER, size_of::<f32>() as DeviceSize, vulkan.swapchain.len())?;
 
         // Construct descriptor sets to bind uniform buffers
         let descriptor_pool = unsafe {

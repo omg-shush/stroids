@@ -1,17 +1,12 @@
 use std::error::Error;
 
-use ash::Device;
-use ash::vk::{ImageCreateInfo, Extent3D, ImageCreateFlags, Format, ImageType, ImageLayout, SampleCountFlags, ImageUsageFlags, Image, MemoryMapFlags, CommandBufferBeginInfo, CommandBufferUsageFlags, BufferUsageFlags, DeviceSize, ImageView, ImageViewCreateInfo, ImageViewType, ImageAspectFlags, ImageSubresourceRange, BufferImageCopy, ImageSubresourceLayers, PipelineStageFlags, DependencyFlags, ImageMemoryBarrier, AccessFlags, SubmitInfo, FenceCreateInfo, SamplerCreateInfo, Filter, DescriptorPoolSize, DescriptorType, DescriptorPoolCreateInfo, DescriptorSetAllocateInfo, DescriptorImageInfo, WriteDescriptorSet, DescriptorSet};
-use image::{GenericImageView, DynamicImage};
+use ash::vk::{ImageCreateInfo, Extent3D, ImageCreateFlags, Format, ImageType, ImageLayout, SampleCountFlags, ImageUsageFlags, MemoryMapFlags, CommandBufferBeginInfo, CommandBufferUsageFlags, BufferUsageFlags, DeviceSize, ImageViewCreateInfo, ImageViewType, ImageAspectFlags, ImageSubresourceRange, BufferImageCopy, ImageSubresourceLayers, PipelineStageFlags, DependencyFlags, ImageMemoryBarrier, AccessFlags, SubmitInfo, FenceCreateInfo, SamplerCreateInfo, Filter, DescriptorPoolSize, DescriptorType, DescriptorPoolCreateInfo, DescriptorSetAllocateInfo, DescriptorImageInfo, WriteDescriptorSet, DescriptorSet};
+use image::{GenericImageView};
 use image::io::Reader;
 
 use crate::vulkan::vulkan_instance::VulkanInstance;
 
 pub struct Texture {
-    device: Device,
-    image: DynamicImage,
-    texture: Image,
-    view: ImageView,
     pub descriptor_set: DescriptorSet
 }
 
@@ -33,8 +28,9 @@ impl Texture {
             .image_type(ImageType::TYPE_2D)
             .mip_levels(1)
             .samples(SampleCountFlags::TYPE_1)
-            .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::SAMPLED);
-        let texture = vulkan.allocator.allocate_image(&create_info)?;
+            .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::SAMPLED)
+            .build();
+        let texture = vulkan.allocator.allocate_image(&vulkan.device, &create_info)?;
 
         // Create image view
         let subresource_range = ImageSubresourceRange {
@@ -97,7 +93,7 @@ impl Texture {
 
         // Initialize staging buffer
         let (staging_buffer, staging_allocation) =
-            vulkan.allocator.allocate_buffer(BufferUsageFlags::TRANSFER_SRC, (image.width() * image.height() * 4) as DeviceSize)?;
+            vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::TRANSFER_SRC, (image.width() * image.height() * 4) as DeviceSize)?;
         unsafe {
             let ptr = vulkan.device.map_memory(staging_allocation.memory, staging_allocation.offset, staging_allocation.size, MemoryMapFlags::empty())?;
             let data = image.pixels().map(|p| (p.2).0).flatten().collect::<Vec<_>>();
@@ -159,6 +155,6 @@ impl Texture {
             vulkan.device.destroy_fence(fence, None);
         };
 
-        Ok (Texture { device: vulkan.device.clone(), image, texture, view, descriptor_set })
+        Ok (Texture { descriptor_set })
     }
 }
