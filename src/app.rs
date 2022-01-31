@@ -61,7 +61,7 @@ impl App {
                     let semaphores_available = [vulkan.swapchain.semaphore_image_available[vulkan.swapchain.index]];
                     let waiting_stages = [PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
                     let semaphores_finished = [vulkan.swapchain.semaphore_rendering_finished[vulkan.swapchain.index]];
-                    let command_buffers = [vulkan.graphics_command_buffers[vulkan.swapchain.index]];
+                    let command_buffers = [cmdbuf];
                     let submit_info = [*SubmitInfo::builder()
                         .wait_semaphores(&semaphores_available)
                         .wait_dst_stage_mask(&waiting_stages)

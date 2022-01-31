@@ -12,7 +12,10 @@ pub struct Texture {
 
 impl Texture {
     pub fn new(vulkan: &VulkanInstance, file: &str) -> Result<Texture, Box<dyn Error>> {
-        // let image = image::open(file)?;
+        let file = if !cfg!(debug_assertions) {
+           file.replace("2", "8") // Select high-res textures
+        } else { file.to_owned() };
+        println!("Loading texture {0}", file);
         let image = Reader::open(file)?.decode()?;
 
         // Create vulkan image

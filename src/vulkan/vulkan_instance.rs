@@ -292,8 +292,12 @@ impl VulkanInstance {
         let pipeline_layout_state = PipelineLayoutCreateInfo::builder()
             .push_constant_ranges(&[PushConstantRange {
                 offset: 0,
-                size: 4 * 4 * 4,
+                size: 2 * 4 * 4 * 4, // two mat4x4's
                 stage_flags: ShaderStageFlags::VERTEX
+            }, PushConstantRange {
+                offset: 2 * 4 * 4 * 4,
+                size: 4,
+                stage_flags: ShaderStageFlags::FRAGMENT
             }])
             .set_layouts(&descriptor_set_layouts);
         let (graphics_pipeline, pipeline_layout) = VulkanPipeline::new(&device, surface_caps.current_extent, &render_pass, msaa_count,

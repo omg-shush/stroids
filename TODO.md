@@ -1,7 +1,7 @@
 # TODO
 
 - [x] Basic rendering using Vulkan
-- [ ] Solar system rendering
+- [x] Solar system rendering
 - [ ] Player space controls
 - [ ] System player physics
 - [ ] System generation
