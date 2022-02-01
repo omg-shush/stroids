@@ -26,17 +26,20 @@ impl App {
                 .with_resizable(false)
                 .with_inner_size(LogicalSize::new(1080, 720))
                 .build(&event_loop)?;
-        window.set_cursor_grab(true)?;
-        window.set_cursor_visible(false);
         Ok (App {
             event_loop, window
         })
     }
 
     pub fn run(self, mut vulkan: VulkanInstance, system: System) {
+        self.window.set_cursor_grab(true).expect("Failed to grab cursor");
+        self.window.set_cursor_visible(false);
+
         let mut player = Player::new(&vulkan).expect("Failed to create player");
         let time_start = Instant::now();
         let mut last_frame = time_start;
+        let mut last_second = time_start;
+        let mut fps = 0;
         let mut keys: HashMap<VirtualKeyCode, bool> = HashMap::new();
 
         self.event_loop.run(move |event, _, control| {
@@ -86,6 +89,14 @@ impl App {
                     let time = (now - time_start).as_secs_f32();
                     let delta_time = (now - last_frame).as_secs_f32();
                     last_frame = now;
+
+                    // FPS counter
+                    fps += 1;
+                    if now - last_second > Duration::from_secs(1) {
+                        last_second = now;
+                        println!("FPS: {:}", fps);
+                        fps = 0;
+                    }
 
                     // Update
                     player.update(&keys, delta_time);
