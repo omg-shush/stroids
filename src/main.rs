@@ -12,6 +12,7 @@ mod vulkan;
 mod app;
 mod system;
 mod texture;
+mod player;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");

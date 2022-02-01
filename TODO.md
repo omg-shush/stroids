@@ -2,7 +2,7 @@
 
 - [x] Basic rendering using Vulkan
 - [x] Solar system rendering
-- [ ] Player space controls
+- [x] Player space controls
 - [ ] System player physics
 - [ ] System generation
 - [ ] System rendering

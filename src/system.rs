@@ -1,13 +1,12 @@
 use std::f32::consts::PI;
 use std::fs::File;
 use std::io::BufReader;
-use std::time::Instant;
 use std::slice;
 use std::error::Error;
 use std::mem::size_of;
 
 use ash::vk::{CommandBuffer, Buffer, BufferUsageFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint, IndexType};
-use nalgebra::{Rotation3, Scale3, Perspective3, Translation3, Vector3};
+use nalgebra::{Rotation3, Scale3, Translation3, Vector3, Matrix4};
 use obj::{load_obj, Obj, TexturedVertex};
 
 use crate::texture::Texture;
@@ -19,15 +18,16 @@ pub struct Planet {
     radius: f32, // size of sphere
     orbit: f32, // dist from sun
     year: f32, // time to orbit sun
-    day: f32 // time to revolve around self
+    day: f32, // time to revolve around self
+    phase: f32 // initial phase in orbit
 }
 
 impl Planet {
     pub fn position(&self, time: f32) -> [f32; 3] {
         [
-            (2.0 * PI * time / self.year).cos() * self.orbit,
+            ((2.0 * PI * time) / self.year + self.phase).cos() * self.orbit,
             0.0,
-            (2.0 * PI * time / self.year).sin() * self.orbit
+            ((2.0 * PI * time) / self.year + self.phase).sin() * self.orbit
         ]
     }
 
@@ -50,7 +50,6 @@ impl Planet {
 }
 
 pub struct System {
-    start: Instant,
     planets: Vec<Planet>,
     vertex_buffer: Buffer,
     index_buffer: Buffer,
@@ -68,29 +67,41 @@ impl System {
                 texture: Texture::new(vulkan, "res/2k_mercury.jpg")?,
                 radius: 0.2,
                 orbit: 2.0,
-                year: 10.0,
-                day: 9.5,
+                year: 100.0,
+                day: 95.0,
+                phase: 1.3 * PI
             },
             Planet {
                 texture: Texture::new(vulkan, "res/2k_venus_surface.jpg")?,
                 radius: 0.35,
                 orbit: 4.5,
-                year: 15.0,
-                day: 2.5
+                year: 150.0,
+                day: 25.0,
+                phase: 0.7 * PI
             },
             Planet {
                 texture: Texture::new(vulkan, "res/2k_earth_daymap.jpg")?,
                 radius: 0.5,
                 orbit: 7.8,
-                year: 25.0,
-                day: 4.0
+                year: 250.0,
+                day: 40.0,
+                phase: 0.1 * PI
+            },
+            Planet {
+                texture: Texture::new(vulkan, "res/2k_earth_clouds.png")?,
+                radius: 0.54,
+                orbit: 7.8,
+                year: 250.0,
+                day: 50.0,
+                phase: 0.1 * PI
             },
             Planet {
                 texture: Texture::new(vulkan, "res/2k_mars.jpg")?,
                 radius: 0.45,
                 orbit: 9.0,
-                year: 30.0,
-                day: 4.8
+                year: 300.0,
+                day: 48.0,
+                phase: 1.7 * PI
             }
         ];
 
@@ -168,7 +179,7 @@ impl System {
         unsafe { vulkan.device.update_descriptor_sets(&descriptor_writes, &[]) };
 
         Ok (System {
-            start: Instant::now(), planets,
+            planets,
             vertex_buffer, index_buffer, index_count: sphere.indices.len() as u32,
             stars: stars?, sun: sun?,
             uniform_allocations, descriptor_sets
@@ -176,10 +187,8 @@ impl System {
     }
 
     // TODO return result?
-    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer) {
+    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view: Matrix4<f32>, view_rot: Matrix4<f32>, projection: Matrix4<f32>, time: f32) {
         unsafe {
-            let time = (Instant::now() - self.start).as_secs_f32();
-
             // Update brightness uniform
             let alloc = &self.uniform_allocations[vulkan.swapchain.index];
             let dst = vulkan.device.map_memory(alloc.memory, alloc.offset, alloc.size, MemoryMapFlags::empty()).expect("Failed to map memory");
@@ -193,17 +202,6 @@ impl System {
             // Bind model data
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
             vulkan.device.cmd_bind_index_buffer(cmdbuf, self.index_buffer, 0, IndexType::UINT16);
-
-            let (view, view_rot) = {
-                let pos = Vector3::from([-4.0f32 - (time / 2.5), 0.0, 3.0]);
-                let t = Translation3::from(-1.0 * pos);
-                let dir = Vector3::x();
-                let r = Rotation3::look_at_rh(&dir, &Vector3::from([0.0, 1.0, 0.0]));
-                (r.to_homogeneous() * t.to_homogeneous(), r.to_homogeneous())
-            };
-            let projection = {
-                Perspective3::new(1080.0 / 720.2, 70f32.to_radians(), 0.1, 200.0).to_homogeneous()
-            };
 
             // Render skybox
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,

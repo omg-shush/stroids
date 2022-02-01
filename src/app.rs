@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::time::{Instant, Duration};
 
+use nalgebra::{Vector3, Translation3, Perspective3, UnitQuaternion, UnitVector3};
 use winit::dpi::LogicalSize;
-use winit::event::{WindowEvent, Event, KeyboardInput, ElementState, VirtualKeyCode};
+use winit::event::{WindowEvent, Event, KeyboardInput, ElementState, VirtualKeyCode, DeviceEvent};
 use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{WindowBuilder, Window};
 use ash::vk::{PipelineStageFlags, SubmitInfo};
 
+use crate::player::Player;
 use crate::system::System;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 
@@ -23,16 +26,27 @@ impl App {
                 .with_resizable(false)
                 .with_inner_size(LogicalSize::new(1080, 720))
                 .build(&event_loop)?;
+        window.set_cursor_grab(true)?;
+        window.set_cursor_visible(false);
         Ok (App {
             event_loop, window
         })
     }
 
     pub fn run(self, mut vulkan: VulkanInstance, system: System) {
+        let mut player = Player::new(&vulkan).expect("Failed to create player");
+        let time_start = Instant::now();
+        let mut last_frame = time_start;
+        let mut keys: HashMap<VirtualKeyCode, bool> = HashMap::new();
+
         self.event_loop.run(move |event, _, control| {
             // Wait until next frame needs to be drawn
             let frame_time = Duration::from_secs_f32(1.0 / 60.0);
             *control = ControlFlow::WaitUntil(Instant::now() + frame_time);
+
+            let camera_x_axis = UnitVector3::new_normalize(player.camera.transform_vector(&Vector3::x()));
+            let camera_y_axis = UnitVector3::new_normalize(player.camera.transform_vector(&Vector3::y()));
+            let _camera_z_axis = UnitVector3::new_normalize(player.camera.transform_vector(&Vector3::z()));
 
             match event {
                 Event::WindowEvent { event: WindowEvent::CloseRequested, .. } |
@@ -46,12 +60,53 @@ impl App {
                 } => {
                     *control = ControlFlow::Exit;
                 },
+                Event::WindowEvent {
+                    event: WindowEvent::KeyboardInput {
+                        input: KeyboardInput {
+                            state,
+                            virtual_keycode: Some (key), ..
+                        }, ..
+                    }, ..
+                } => {
+                    keys.insert(key, state == ElementState::Pressed);
+                },
+                Event::DeviceEvent {
+                    event: DeviceEvent::MouseMotion {
+                        delta: (x, y)
+                    }, ..
+                } => {
+                    player.camera =
+                        UnitQuaternion::from_axis_angle(&camera_y_axis, -0.001 * x as f32)
+                        * UnitQuaternion::from_axis_angle(&camera_x_axis, 0.001 * y as f32)
+                        * player.camera;
+                },
                 Event::RedrawRequested(_) => {
                     vulkan.swapchain.acquire(&vulkan.device);
+                    let now = Instant::now();
+                    let time = (now - time_start).as_secs_f32();
+                    let delta_time = (now - last_frame).as_secs_f32();
+                    last_frame = now;
+
+                    // Update
+                    player.update(&keys, delta_time);
 
                     // Rewrite command buffer
                     let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");
-                    system.render(&vulkan, cmdbuf);
+
+                    let (view, view_rot) = {
+                        let pos = player.position + player.camera.transform_vector(&Vector3::from([0.0, -0.08, 0.5]));
+                        let t = Translation3::from(-1.0 * pos);
+                        let r = player.camera.inverse().to_rotation_matrix();
+                        (r.to_homogeneous() * t.to_homogeneous(), r.to_homogeneous())
+                    };
+                    let projection = {
+                        Perspective3::new(1080.0 / 720.0, 70f32.to_radians(), 0.001, 200.0).to_homogeneous()
+                    };
+
+                    // Render
+                    system.render(&vulkan, cmdbuf, view, view_rot, projection, time);
+                    player.render(&vulkan, cmdbuf, (projection * view).as_slice());
+
                     unsafe {
                         vulkan.device.cmd_end_render_pass(cmdbuf);
                         vulkan.device.end_command_buffer(cmdbuf).expect("Failed to end recording commands");
