@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::error::Error;
 
 use ash::{Device, Instance};
-use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler};
+use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler, MemoryType};
 
 pub struct VulkanAllocator {
     memory_properties: PhysicalDeviceMemoryProperties,
@@ -63,18 +63,20 @@ impl VulkanAllocator {
         let next_allocation_index = device_allocations.len();
         let device_allocation_index = device_allocations.iter_mut()
             .position(|da| {
-                ((1 << da.index) & reqs.memory_type_bits > 0) && (da.size - VulkanAllocator::align_up(da.free_offset, alignment) >= size)
-            }).unwrap_or_else(|| {
+                ((1 << da.index) & reqs.memory_type_bits > 0)
+                    && (self.memory_properties.memory_types[da.index as usize].property_flags.contains(props))
+                    && (da.size - VulkanAllocator::align_up(da.free_offset, alignment) >= size)
+            }).ok_or("No suitable existing allocation found".into()).or_else::<Box<dyn Error>, _>(|_: Box<dyn Error>| {
                 let device_size = size.max(1 << 27);
-                let memory_type_index = self.get_memory_type_index(props, reqs.memory_type_bits).expect("Failed to find appropriate device memory");
+                let memory_type_index = self.get_memory_type_index(props, reqs.memory_type_bits)?;
                 let create_info = MemoryAllocateInfo::builder()
                     .allocation_size(device_size)
                     .memory_type_index(memory_type_index);
-                let memory = unsafe { device.allocate_memory(&create_info, None).expect("Failed to allocate device memory") };
+                let memory = unsafe { device.allocate_memory(&create_info, None)? };
                 let new_alloc = DeviceAllocation { memory, index: memory_type_index, size: device_size, free_offset: 0 };
                 device_allocations.push(new_alloc);
-                next_allocation_index
-            });
+                Ok (next_allocation_index)
+            })?;
         let device_allocation = &mut device_allocations[device_allocation_index];
 
         let alloc = Allocation { memory: device_allocation.memory, offset: VulkanAllocator::align_up(device_allocation.free_offset, alignment), size };
@@ -138,7 +140,8 @@ impl VulkanAllocator {
         let image = unsafe { device.create_image(create_info, None)? };
         self.images.borrow_mut().push(image);
         let reqs = unsafe { device.get_image_memory_requirements(image) };
-        let allocation = self.allocate_memory(device, reqs, MemoryPropertyFlags::empty())?;
+        let allocation = self.allocate_memory(device, reqs, MemoryPropertyFlags::DEVICE_LOCAL)
+            .or_else(|_| self.allocate_memory(device, reqs, MemoryPropertyFlags::empty()))?;
         unsafe { device.bind_image_memory(image, allocation.memory, allocation.offset)? };
         Ok (image)
     }
