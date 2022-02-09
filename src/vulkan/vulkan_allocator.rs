@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::error::Error;
 
 use ash::{Device, Instance};
-use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler, MemoryType};
+use ash::vk::{PhysicalDevice, Buffer, DeviceMemory, MemoryPropertyFlags, PhysicalDeviceMemoryProperties, MemoryAllocateInfo, BufferCreateInfo, SharingMode, BufferUsageFlags, DeviceSize, BindBufferMemoryInfo, MemoryRequirements, Image, ImageCreateInfo, ImageView, Sampler};
 
 pub struct VulkanAllocator {
     memory_properties: PhysicalDeviceMemoryProperties,
