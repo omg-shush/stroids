@@ -60,7 +60,7 @@ impl Player {
         };
 
         Ok (Player {
-            camera, orientation, velocity, position: Vector3::from([5.0, 0.0, 0.0]),
+            camera, orientation, velocity, position: Vector3::from([0.0, 4.0, 0.0]),
             vertex_buffer, index_buffer, index_count: rocket.indices.len() as u32,
             texture
         })

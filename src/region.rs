@@ -1,3 +1,8 @@
+use ash::vk::CommandBuffer;
+use nalgebra::Matrix4;
+
+use crate::vulkan::vulkan_instance::VulkanInstance;
+
 #[derive(Clone)]
 enum Voxel {
     Empty,
@@ -30,5 +35,10 @@ impl Region {
 
     fn generate(&mut self) {
         // First generate basic rock structures
+        self.voxels[0][0][0] = Voxel::Regolith;
+    }
+
+    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view: Matrix4<f32>, view_rot: Matrix4<f32>, projection: Matrix4<f32>, time: f32) {
+        
     }
 }

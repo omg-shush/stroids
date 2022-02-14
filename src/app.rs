@@ -9,6 +9,7 @@ use winit::event_loop::{EventLoop, ControlFlow};
 use winit::window::{WindowBuilder, Window};
 use ash::vk::{PipelineStageFlags, SubmitInfo};
 
+use crate::asteroid::Asteroid;
 use crate::player::Player;
 use crate::system::System;
 use crate::vulkan::vulkan_instance::VulkanInstance;
@@ -31,7 +32,7 @@ impl App {
         })
     }
 
-    pub fn run(self, mut vulkan: VulkanInstance, system: System) {
+    pub fn run(self, mut vulkan: VulkanInstance, asteroid: Asteroid, system: System) {
         self.window.set_cursor_grab(true).expect("Failed to grab cursor");
         self.window.set_cursor_visible(false);
 
@@ -116,6 +117,7 @@ impl App {
 
                     // Render
                     system.render(&vulkan, cmdbuf, view, view_rot, projection, time);
+                    asteroid.render(&vulkan, cmdbuf, projection * view);
                     player.render(&vulkan, cmdbuf, (projection * view).as_slice());
 
                     unsafe {

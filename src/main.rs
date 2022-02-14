@@ -20,10 +20,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let app = App::new()?;
     let vulkan = VulkanInstance::new(&app.window)?;
 
-    let asteroid = Asteroid::new(AsteroidType::Metallic, [100, 100, 30]);
+    let asteroid = Asteroid::new(&vulkan, AsteroidType::Metallic, [100, 100, 30])?;
     let system = System::new(&vulkan)?;
 
-    app.run(vulkan, system);
+    app.run(vulkan, asteroid, system);
 
     Ok(())
 }

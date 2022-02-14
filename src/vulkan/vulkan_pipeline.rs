@@ -58,7 +58,7 @@ impl VulkanPipeline {
         let rasterization_state = PipelineRasterizationStateCreateInfo::builder()
             .line_width(1.0)
             .front_face(FrontFace::CLOCKWISE)
-            .cull_mode(CullModeFlags::NONE)
+            .cull_mode(CullModeFlags::BACK)
             .polygon_mode(PolygonMode::FILL);
         let multisample_state = PipelineMultisampleStateCreateInfo::builder()
             .rasterization_samples(msaa_count);
