@@ -13,6 +13,7 @@ mod app;
 mod system;
 mod texture;
 mod player;
+mod buffer;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");

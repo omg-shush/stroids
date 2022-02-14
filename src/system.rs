@@ -5,10 +5,11 @@ use std::slice;
 use std::error::Error;
 use std::mem::size_of;
 
-use ash::vk::{CommandBuffer, Buffer, BufferUsageFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint, IndexType};
+use ash::vk::{CommandBuffer, BufferUsageFlags, MemoryMapFlags, ShaderStageFlags, DeviceSize, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorType, DescriptorSetAllocateInfo, DescriptorSet, WriteDescriptorSet, DescriptorBufferInfo, PipelineBindPoint, IndexType};
 use nalgebra::{Rotation3, Scale3, Translation3, Vector3, Matrix4};
 use obj::{load_obj, Obj, TexturedVertex};
 
+use crate::buffer::DynamicBuffer;
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 use crate::vulkan::vulkan_allocator::Allocation;
@@ -51,9 +52,8 @@ impl Planet {
 
 pub struct System {
     planets: Vec<Planet>,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    index_count: u32,
+    vertices: DynamicBuffer,
+    indices: DynamicBuffer,
     stars: Texture,
     sun: Texture,
     uniform_allocations: Vec<Allocation>,
@@ -112,28 +112,14 @@ impl System {
         let file = BufReader::new(File::open("res/sphere.obj")?);
         let sphere: Obj<TexturedVertex> = load_obj(file)?;
 
-        // Allocate & write vertex buffer
+        // Create vertex buffer and index buffers
         let vertices = sphere.vertices.iter().map(|v| {
             let mut vec = [v.position, v.normal].concat();
             vec.extend_from_slice(&v.texture[..2]);
             vec
         }).flatten().collect::<Vec<_>>();
-        let (vertex_buffer, _vertex_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
-            (dst as *mut f32).copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            vulkan.device.unmap_memory(allocation.memory);
-            (buffer, allocation)
-        };
-
-        // Allocate & write index buffer
-        let (index_buffer, _index_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::INDEX_BUFFER, (sphere.indices.len() * 2) as u64)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
-            (dst as *mut u16).copy_from_nonoverlapping(sphere.indices.as_ptr(), sphere.indices.len());
-            vulkan.device.unmap_memory(allocation.memory);
-            (buffer, allocation)
-        };
+        let vertices = DynamicBuffer::new(vulkan, &vertices)?;
+        let indices = DynamicBuffer::new(vulkan, &sphere.indices)?;
 
         // Allocate uniform buffers
         let (uniform_buffers, uniform_allocations) = vulkan.allocator.allocate_buffer_chain(
@@ -180,7 +166,7 @@ impl System {
 
         Ok (System {
             planets,
-            vertex_buffer, index_buffer, index_count: sphere.indices.len() as u32,
+            vertices, indices,
             stars: stars?, sun: sun?,
             uniform_allocations, descriptor_sets
         })
@@ -200,8 +186,8 @@ impl System {
                 0, &[self.descriptor_sets[vulkan.swapchain.index]], &[]);
 
             // Bind model data
-            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
-            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.index_buffer, 0, IndexType::UINT16);
+            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertices.buffer], &[0]);
+            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT16);
 
             // Render skybox
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
@@ -216,7 +202,7 @@ impl System {
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
 
-            vulkan.device.cmd_draw_indexed(cmdbuf, self.index_count, 1, 0, 0, 0);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
 
             // Render sun
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
@@ -228,14 +214,14 @@ impl System {
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
 
-            vulkan.device.cmd_draw_indexed(cmdbuf, self.index_count, 1, 0, 0, 0);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
 
             // Render planets
             let data = 1u32.to_ne_bytes(); // Turn lighting back on for planets
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::FRAGMENT, 128, &data);
             
             for planet in &self.planets {
-                planet.render(vulkan, cmdbuf, vp.as_slice(), self.index_count, time);
+                planet.render(vulkan, cmdbuf, vp.as_slice(), self.indices.len, time);
             }
         };
     }

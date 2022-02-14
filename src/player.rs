@@ -9,6 +9,7 @@ use nalgebra::{UnitQuaternion, Translation3, Vector3, Scale3, Rotation3, UnitVec
 use obj::{Obj, TexturedVertex, load_obj};
 use winit::event::VirtualKeyCode;
 
+use crate::buffer::DynamicBuffer;
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 
@@ -17,11 +18,8 @@ pub struct Player {
     pub orientation: UnitQuaternion<f32>,
     pub velocity: Vector3<f32>,
     pub position: Vector3<f32>,
-    // TODO create "model" object
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    index_count: u32,
-    //
+    vertices: DynamicBuffer,
+    indices: DynamicBuffer,
     texture: Texture
 }
 
@@ -36,32 +34,18 @@ impl Player {
         let orientation = UnitQuaternion::identity();
         let velocity = Vector3::zeros();
 
-        // Allocate & write vertex buffer
+        // Allocate & write vertex/index buffers
         let vertices = rocket.vertices.iter().map(|v| {
             let mut vec = [v.position, v.normal].concat();
             vec.extend_from_slice(&v.texture[..2]);
             vec
         }).flatten().collect::<Vec<_>>();
-        let (vertex_buffer, _vertex_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
-            (dst as *mut f32).copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            vulkan.device.unmap_memory(allocation.memory);
-            (buffer, allocation)
-        };
-
-        // Allocate & write index buffer
-        let (index_buffer, _index_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::INDEX_BUFFER, (rocket.indices.len() * 2) as u64)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
-            (dst as *mut u16).copy_from_nonoverlapping(rocket.indices.as_ptr(), rocket.indices.len());
-            vulkan.device.unmap_memory(allocation.memory);
-            (buffer, allocation)
-        };
+        let vertices = DynamicBuffer::new(vulkan, &vertices)?;
+        let indices = DynamicBuffer::new(vulkan, &rocket.indices)?;
 
         Ok (Player {
             camera, orientation, velocity, position: Vector3::from([0.0, 4.0, 0.0]),
-            vertex_buffer, index_buffer, index_count: rocket.indices.len() as u32,
+            vertices, indices,
             texture
         })
     }
@@ -106,8 +90,8 @@ impl Player {
             let data = 0u32.to_ne_bytes(); // Turn lighting off for skybox
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::FRAGMENT, 128, &data);
 
-            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertex_buffer], &[0]);
-            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.index_buffer, 0, IndexType::UINT16);
+            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.vertices.buffer], &[0]);
+            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT16);
 
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
@@ -120,7 +104,7 @@ impl Player {
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
 
-            vulkan.device.cmd_draw_indexed(cmdbuf, self.index_count, 1, 0, 0, 0);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
         }
     }
 }

@@ -1,11 +1,13 @@
 use std::error::Error;
 use std::slice;
 use std::cmp::Ordering::Equal;
+use std::convert::From;
 
-use ash::vk::{CommandBuffer, BufferUsageFlags, MemoryMapFlags, Buffer, ShaderStageFlags, PipelineBindPoint};
+use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint};
 use nalgebra::{Matrix4, Vector3, Translation3, Scale3};
 use rand::{thread_rng, Rng};
 
+use crate::buffer::DynamicBuffer;
 use crate::region::Region;
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
@@ -22,8 +24,7 @@ pub struct Asteroid {
     size: [u32; 3],
     region: Region,
     heightmap: Heightmap,
-    terrain: Buffer,
-    terrain_len: usize,
+    terrain: DynamicBuffer,
     texture: Texture
 }
 
@@ -53,17 +54,9 @@ impl Asteroid {
                 gen_triangle_vertices((x + 1, y + 1), (x, y + 1), (x, y));
             }
         }
-        let (vertex_buffer, _vertex_allocation) = unsafe {
-            let (buffer, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::VERTEX_BUFFER, (vertices.len() * 4) as u64)?;
-            let dst = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
-            (dst as *mut f32).copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            vulkan.device.unmap_memory(allocation.memory);
-            (buffer, allocation)
-        };
-
+        let terrain = DynamicBuffer::new(vulkan, &vertices)?;
         let texture = Texture::new(&vulkan, "res/grid.jpg")?;
-
-        Ok (Asteroid { asteroid_type, size, region: Region::new(size), heightmap, terrain: vertex_buffer, terrain_len: vertices.len(), texture })
+        Ok (Asteroid { asteroid_type, size, region: Region::new(size), heightmap, terrain, texture })
     }
 
     pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
@@ -78,8 +71,8 @@ impl Asteroid {
 
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
-            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain], &[0]);
-            vulkan.device.cmd_draw(cmdbuf, self.terrain_len as u32, 1, 0, 0)
+            vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
+            vulkan.device.cmd_draw(cmdbuf, self.terrain.len, 1, 0, 0)
         }
     }
 }
@@ -92,116 +85,120 @@ struct Heightmap {
 
 impl Heightmap {
     pub fn new(width: usize, height: usize) -> Heightmap {
-        let mut map = vec![vec![0.0; height]; width];
-
-        fn displace(map: &mut f32, scale: usize) {
-            let offset = thread_rng().gen_range(-1.0..=1.0);
-            let scaled_offset = offset * (2.0f32.powf(-0.65 * scale as f32));
-            *map += scaled_offset;
-        }
-
-        fn diamond_square(map: &mut Vec<Vec<f32>>, scale: usize, min_x: usize, max_x: usize, min_y: usize, max_y: usize) {
-            if max_x - min_x < 2 || max_y - min_y < 2 {
-                return; // Base case; no inner vertices to update
-            }
-
-            // Diamond step: Average 4 corners into center
-            let center_x = (max_x + min_x) / 2;
-            let center_y = (max_y + min_y) / 2;
-            let corners = [map[min_x][min_y], map[min_x][max_y], map[max_x][min_y], map[max_x][max_y]];
-            map[center_x][center_y] = corners.iter().sum::<f32>() / corners.len() as f32;
-            // Displace center
-            displace(&mut map[center_x][center_y], scale);
-
-            // Square step: Set midpoints of each edge to average of adjacent vertices
-            let half_step = (center_x - min_x) as isize;
-            let width = map.len() as isize;
-            let height = map[0].len() as isize;
-            for (x, y) in [(center_x, min_y), (center_x, max_y), (min_x, center_y), (max_x, center_y)].map(|(x, y)| (x as isize, y as isize)) {
-                // Average 4 adjacents into midpoint
-                let corners = [(x - half_step, y), (x + half_step, y), (x, y - half_step), (x, y + half_step)].map(|(x, y)| {
-                    (x.rem_euclid(width) as usize, y.rem_euclid(height) as usize) // Wrap around if one of the vertices is off the edge of the map
-                });
-                map[x as usize][y as usize] = corners.iter().map(|(x, y)| map[*x][*y]).sum::<f32>() / corners.len() as f32;
-                // Displace midpoint
-                displace(&mut map[x as usize][y as usize], scale);
-            }
-
-            // Subdivide and recurse
-            diamond_square(map, scale + 1, min_x, center_x, min_y, center_y);
-            diamond_square(map, scale + 1, min_x, center_x, center_y, max_y);
-            diamond_square(map, scale + 1, center_x, max_x, min_y, center_y);
-            diamond_square(map, scale + 1, center_x, max_x, center_y, max_y);
-        }
+        let mut heightmap = Heightmap {
+            width, height, values: vec![vec![0.0; height]; width]
+        };
 
         // Initialize corners
-        displace(&mut map[0][0], 0);
-        for (x, y) in [(0, height - 1), (width - 1, 0), (width - 1, height - 1)] {
-            map[x][y] = map[0][0];
+        let corner_height = thread_rng().gen_range(0.0..=1.0);
+        for (x, y) in [(0, 0), (0, height - 1), (width - 1, 0), (width - 1, height - 1)] {
+            heightmap.values[x][y] = corner_height;
         }
 
         // Apply diamond-square algorithm
-        diamond_square(&mut map, 1, 0, width - 1, 0, height - 1);
+        heightmap.diamond_square(0.65, 1, 0, width - 1, 0, height - 1);
 
-        // Apply very basic erosion: if a vertex is higher than its surroundings, it will sacrifice some height to them
-        let loss = -0.02; // Factor to decrease higher vertex by
-        let gain = 0.005; // Factor to increase surrounding vertices by
+        // Erode terrain
         for _iterations in 0..50 {
-            let mut delta = vec![vec![0.0; height]; width];
+            heightmap.erode(-0.02, 0.005);
+        }
 
-            // Compute deltas
-            for x in 1 ..= width - 2 {
-                for y in 1 ..= height - 2 {
-                    let surrounding = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
-                    let max_surrounding = surrounding.iter()
-                        .map(|(i, j)| map[*i][*j]).max_by(|a, b| a.partial_cmp(b).unwrap_or(Equal)).unwrap();
-                    if max_surrounding < map[x][y] {
-                        delta[x][y] += map[x][y] * loss;
-                        for (i, j) in surrounding {
-                            delta[i][j] += map[x][y] * gain;
-                        }
+        // Finally, add roughly gaussian blur
+        heightmap.gaussian();
+
+        heightmap
+    }
+
+    fn wrap(&self) -> Box<dyn Fn((isize, isize)) -> (usize, usize) + '_> {
+        Box::new(move |(x, y)| {
+            // Wrap around if one of the vertices is off the edge of the map
+            (x.rem_euclid(self.width as isize) as usize, y.rem_euclid(self.height as isize) as usize)
+        })
+    }
+
+    // Applies gaussian blur to every vertex in the heightmap
+    fn gaussian(&mut self) {
+        let mut new = vec![vec![0.0; self.height]; self.width];
+        // Compute new
+        for x in 0..self.width {
+            for y in 0..self.height {
+                let (x, y) = (x as isize, y as isize);
+                let close = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].map(self.wrap()).map(|(x, y)| self.values[x][y]);
+                let far = [(x - 1, y - 1), (x + 1, y - 1), (x - 1, y - 1), (x - 1, y + 1)].map(self.wrap()).map(|(x, y)| self.values[x][y]);
+                let (x, y) = (x as usize, y as usize);
+                new[x][y] = self.values[x][y] * 4.0 + close.iter().sum::<f32>() * 2.0 + far.iter().sum::<f32>() * 1.0;
+                new[x][y] /= 16.0;
+            }
+        }
+        // Replace map with new
+        self.values = new;
+    }
+
+    // Applies very basic erosion: if a vertex is higher than its surroundings, it will sacrifice some height to them
+    // loss: factor to offset higher vertex by
+    // gain: factor of higher vertex height to increase surrounding vertices by
+    fn erode(&mut self, loss: f32, gain: f32) {
+        let mut delta = vec![vec![0.0; self.height]; self.width];
+        // Compute deltas
+        for x in 0..self.width {
+            for y in 0..self.height {
+                let (x, y) = (x as isize, y as isize);
+                let surrounding = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].map(self.wrap());
+                let (x, y) = (x as usize, y as usize);
+                let max_surrounding = surrounding.iter()
+                    .map(|(i, j)| self.values[*i][*j]).max_by(|a, b| a.partial_cmp(b).unwrap_or(Equal)).unwrap();
+                if max_surrounding < self.values[x][y] {
+                    delta[x][y] += self.values[x][y] * loss;
+                    for (i, j) in surrounding {
+                        delta[i][j] += self.values[x][y] * gain;
                     }
                 }
             }
-
-            // Apply deltas to map
-            for x in 0..width {
-                for y in 0..height {
-                    map[x][y] += delta[x][y];
-                }
+        }
+        // Apply deltas to map
+        for x in 0..self.width {
+            for y in 0..self.height {
+                self.values[x][y] += delta[x][y];
             }
         }
+    }
 
-        // Apply roughly gaussian blur
-        for _iterations in 0..1 {
-            let mut new = vec![vec![0.0; height]; width];
-
-            // Compute new
-            for x in 0..width {
-                for y in 0..height {
-                    let close = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].map(|(x, y)| {
-                        // Wrap around if one of the vertices is off the edge of the map
-                        ((x as isize).rem_euclid(width as isize) as usize, (y as isize).rem_euclid(height as isize) as usize)
-                    }).map(|(x, y)| map[x][y]);
-                    let far = [(x - 1, y - 1), (x + 1, y - 1), (x - 1, y - 1), (x - 1, y + 1)].map(|(x, y)| {
-                        ((x as isize).rem_euclid(width as isize) as usize, (y as isize).rem_euclid(height as isize) as usize)
-                    }).map(|(x, y)| map[x][y]);
-                    new[x][y] = map[x][y] * 4.0 + close.iter().sum::<f32>() * 2.0 + far.iter().sum::<f32>() * 1.0;
-                    new[x][y] /= 16.0;
-                }
-            }
-
-            // Replace map with new
-            map = new;
+    // Applies the diamond-square algorithm on a heightmap with all 4 corners initialized to the same random value
+    // Generates heights between -1.0 and 1.0 which are both x- and y-tileable
+    fn diamond_square(&mut self, smoothness: f32, scale: usize, min_x: usize, max_x: usize, min_y: usize, max_y: usize) {
+        fn displace(vertex: &mut f32, smoothness: f32, scale: usize) {
+            let offset = thread_rng().gen_range(-1.0..=1.0);
+            let scaled_offset = offset * (2.0f32.powf(-1.0 * smoothness * scale as f32));
+            *vertex += scaled_offset;
         }
 
-        // for j in 0..height {
-        //     for i in 0..width {
-        //         print!("{:.2} ", map[i][j]);
-        //     }
-        //     println!();
-        // }
+        if max_x - min_x < 2 || max_y - min_y < 2 {
+            return; // Base case; no inner vertices to update
+        }
 
-        Heightmap { width, height, values: map }
+        // Diamond step: Average 4 corners into center
+        let center_x = (max_x + min_x) / 2;
+        let center_y = (max_y + min_y) / 2;
+        let corners = [self.values[min_x][min_y], self.values[min_x][max_y], self.values[max_x][min_y], self.values[max_x][max_y]];
+        self.values[center_x][center_y] = corners.iter().sum::<f32>() / corners.len() as f32;
+        // Displace center
+        displace(&mut self.values[center_x][center_y], smoothness, scale);
+
+        // Square step: Set midpoints of each edge to average of adjacent vertices
+        let half_step = (center_x - min_x) as isize;
+        for (x, y) in [(center_x, min_y), (center_x, max_y), (min_x, center_y), (max_x, center_y)] {
+            let (x, y) = (x as isize, y as isize);
+            // Average 4 adjacents into midpoint
+            let corners = [(x - half_step, y), (x + half_step, y), (x, y - half_step), (x, y + half_step)].map(self.wrap());
+            self.values[x as usize][y as usize] = corners.iter().map(|(x, y)| self.values[*x][*y]).sum::<f32>() / corners.len() as f32;
+            // Displace midpoint
+            displace(&mut self.values[x as usize][y as usize], smoothness, scale);
+        }
+
+        // Subdivide and recurse
+        Heightmap::diamond_square(self, smoothness, scale + 1, min_x, center_x, min_y, center_y);
+        Heightmap::diamond_square(self, smoothness, scale + 1, min_x, center_x, center_y, max_y);
+        Heightmap::diamond_square(self, smoothness, scale + 1, center_x, max_x, min_y, center_y);
+        Heightmap::diamond_square(self, smoothness, scale + 1, center_x, max_x, center_y, max_y);
     }
 }
