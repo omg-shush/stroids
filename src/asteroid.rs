@@ -1,4 +1,6 @@
+use std::collections::hash_map;
 use std::error::Error;
+use std::hash::{Hash, Hasher};
 use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
@@ -24,6 +26,7 @@ pub struct Asteroid {
     size: [u32; 3],
     region: Region,
     heightmap: Heightmap,
+    perlin: Perlin3D,
     terrain: DynamicBuffer,
     texture: Texture
 }
@@ -31,6 +34,7 @@ pub struct Asteroid {
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
         let heightmap = Heightmap::new(129, 129);
+        let perlin = Perlin3D::new(0);
 
         // Allocate & write vertex buffer
         let mut vertices = Vec::new();
@@ -39,7 +43,11 @@ impl Asteroid {
                 // For each square in the heightmap
                 let mut gen_triangle_vertices = |a, b, c| {
                     let vs = [a, b, c].map(|(i, j)| {
-                        Vector3::from([i as f32, heightmap.values.get::<usize>(i).unwrap()[j], j as f32])
+                        // Vector3::from([i as f32, heightmap.values.get::<usize>(i).unwrap()[j], j as f32])
+                        let height =
+                            0.25 * perlin.sample(Vector3::from([i as f32 / 8.0, j as f32 / 8.0, 0.3]))
+                            + 0.75 * perlin.sample(Vector3::from([i as f32 / 32.0, j as f32 / 32.0, 0.7]));
+                        Vector3::from([i as f32, height, j as f32])
                     });
                     let vn = (vs[2] - vs[0]).cross(&(vs[1] - vs[0])).normalize();
 
@@ -56,7 +64,7 @@ impl Asteroid {
         }
         let terrain = DynamicBuffer::new(vulkan, &vertices)?;
         let texture = Texture::new(&vulkan, "res/grid.jpg")?;
-        Ok (Asteroid { asteroid_type, size, region: Region::new(size), heightmap, terrain, texture })
+        Ok (Asteroid { asteroid_type, size, region: Region::new(size), heightmap, perlin, terrain, texture })
     }
 
     pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
@@ -74,6 +82,78 @@ impl Asteroid {
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
             vulkan.device.cmd_draw(cmdbuf, self.terrain.len, 1, 0, 0)
         }
+    }
+}
+
+struct Perlin3D {
+    seed: usize
+}
+
+impl Perlin3D {
+    pub fn new(seed: usize) -> Perlin3D {
+        Perlin3D { seed }
+    }
+
+    fn gradient(&self, x: isize, y: isize, z: isize) -> Vector3<f32> {
+        let choices = vec![
+            Vector3::from([1.0, 1.0, 0.0]),
+            Vector3::from([-1.0, 1.0, 0.0]),
+            Vector3::from([1.0, -1.0, 0.0]),
+            Vector3::from([-1.0, -1.0, 0.0]),
+            Vector3::from([1.0, 0.0, 1.0]),
+            Vector3::from([-1.0, 0.0, 1.0]),
+            Vector3::from([1.0, 0.0, -1.0]),
+            Vector3::from([-1.0, 0.0, -1.0]),
+            Vector3::from([0.0, 1.0, 1.0]),
+            Vector3::from([0.0, -1.0, 1.0]),
+            Vector3::from([0.0, 1.0, -1.0]),
+            Vector3::from([0.0, -1.0, -1.0])
+        ].iter().map(|v| v.normalize()).collect::<Vec<_>>();
+        let mut hasher = hash_map::DefaultHasher::new();
+        x.hash(&mut hasher);
+        y.hash(&mut hasher);
+        z.hash(&mut hasher);
+        let hash = hasher.finish() as usize;
+        choices[hash.rem_euclid(choices.len())]
+    }
+
+    fn blending(&self, t: f32) -> f32 {
+        6.0 * t.powi(5) - 15.0 * t.powi(4) + 10.0 * t.powi(3)
+    }
+
+    pub fn sample(&self, position: Vector3<f32>) -> f32 {
+        let floor = position.map(|f| f.floor());
+        let (floor_x, floor_y, floor_z) = (floor[0] as isize, floor[1] as isize, floor[2] as isize);
+        let (u, v, w) = (position[0] - floor[0], position[1] - floor[1], position[2] - floor[2]);
+        // For each of the 8 nearest grid points
+        let mut contribs = Vec::new();
+        for x in floor_x ..= floor_x + 1 {
+            for y in floor_y ..= floor_y + 1 {
+                for z in floor_z ..= floor_z + 1 {
+                    // Get gradient at this grid point
+                    let gradient = self.gradient(x, y, z);
+                    // Find vector from this grid point to the desired point
+                    let vector = Vector3::from([position[0] - x as f32, position[1] - y as f32, position[2] - z as f32]);
+                    // Compute contribution
+                    contribs.push(gradient.dot(&vector));
+                }
+                // Blend in z axis
+                let a = contribs.pop().unwrap();
+                let b = contribs.pop().unwrap();
+                let blend = self.blending(w);
+                contribs.push(a * blend + b * (1.0 - blend));
+            }
+            // Blend in y axis
+            let a = contribs.pop().unwrap();
+            let b = contribs.pop().unwrap();
+            let blend = self.blending(v);
+            contribs.push(a * blend + b * (1.0 - blend));
+        }
+        // Blend in x axis
+        let a = contribs.pop().unwrap();
+        let b = contribs.pop().unwrap();
+        let blend = self.blending(u);
+        a * blend + b * (1.0 - blend)
     }
 }
 

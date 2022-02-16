@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
 
-use ash::vk::{Buffer, BufferUsageFlags, MemoryMapFlags, CommandBuffer, PipelineBindPoint, ShaderStageFlags, IndexType};
+use ash::vk::{CommandBuffer, PipelineBindPoint, ShaderStageFlags, IndexType};
 use nalgebra::{UnitQuaternion, Translation3, Vector3, Scale3, Rotation3, UnitVector3};
 use obj::{Obj, TexturedVertex, load_obj};
 use winit::event::VirtualKeyCode;
