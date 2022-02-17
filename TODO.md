@@ -11,4 +11,5 @@
 - [ ] Asteroid player physics
 - [ ] Asteroid factory construction
 - [ ] Asteroid factory analysis
+- [ ] Asteroid factory automatic construction skydock
 - [ ] Multiplayer

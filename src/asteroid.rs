@@ -1,12 +1,16 @@
 use std::collections::hash_map;
 use std::error::Error;
+use std::f32::consts::{PI, FRAC_PI_2};
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::BufReader;
 use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
 
-use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint};
-use nalgebra::{Matrix4, Vector3, Translation3, Scale3};
+use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType};
+use nalgebra::{Matrix4, Vector3, Translation3, Scale3, Rotation3};
+use obj::{Obj, TexturedVertex, load_obj};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
@@ -25,54 +29,72 @@ pub struct Asteroid {
     asteroid_type: AsteroidType,
     size: [u32; 3],
     region: Region,
-    heightmap: Heightmap,
-    perlin: Perlin3D,
     terrain: DynamicBuffer,
+    indices: DynamicBuffer,
     texture: Texture
 }
 
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
-        let heightmap = Heightmap::new(129, 129);
         let perlin = Perlin3D::new(0);
 
-        // Allocate & write vertex buffer
-        let mut vertices = Vec::new();
-        for x in 0..=heightmap.width - 2 {
-            for y in 0..=heightmap.height - 2 {
-                // For each square in the heightmap
-                let mut gen_triangle_vertices = |a, b, c| {
-                    let vs = [a, b, c].map(|(i, j)| {
-                        // Vector3::from([i as f32, heightmap.values.get::<usize>(i).unwrap()[j], j as f32])
-                        let height =
-                            0.25 * perlin.sample(Vector3::from([i as f32 / 8.0, j as f32 / 8.0, 0.3]))
-                            + 0.75 * perlin.sample(Vector3::from([i as f32 / 32.0, j as f32 / 32.0, 0.7]));
-                        Vector3::from([i as f32, height, j as f32])
-                    });
-                    let vn = (vs[2] - vs[0]).cross(&(vs[1] - vs[0])).normalize();
-
-                    for vertex in vs {
-                        vertices.extend_from_slice(vertex.as_slice());
-                        vertices.extend_from_slice(vn.as_slice());
-                        vertices.extend([vertex[0] / heightmap.width as f32, vertex[2] / heightmap.height as f32]); // UV coordinate
-                    }
-                };
-                
-                gen_triangle_vertices((x, y), (x + 1, y), (x + 1, y + 1));
-                gen_triangle_vertices((x + 1, y + 1), (x, y + 1), (x, y));
+        // Create vertices of sphere
+        let (x_res, y_res) = (100, 50);
+        let mut sphere_vertices: Vec<([f32; 3], [f32; 3], [f32; 2])> = Vec::new();
+        for x in 0..x_res {
+            let azimuth = x as f32 / x_res as f32 * 2.0 * PI;
+            for y in 0..=y_res {
+                let altitude = y as f32 / y_res as f32 * PI - PI / 2.0;
+                let position = Rotation3::from_euler_angles(0.0, altitude, azimuth) * Vector3::from([1.0, 0.0, 0.0]);
+                let normal = position.normalize();
+                let uv = [azimuth, altitude];
+                sphere_vertices.push((position.as_slice().try_into().unwrap(), normal.as_slice().try_into().unwrap(), uv));
             }
         }
+
+
+        // Create vertex data
+        let vertices = sphere_vertices.iter().map(|(v, vn, vt)| {
+            // Offset sphere's vertices using noise
+            let position = Vector3::from(*v);
+            let height =
+                0.05 * perlin.sample(position * 55.0)
+                + 0.20 * perlin.sample(position * 37.0)
+                + 0.75 * perlin.sample(position * 2.0);
+            let offset_position = position * (1.0 + 0.3 * height);
+
+            // Store resulting vertex data
+            let mut vec = [offset_position.as_slice(), vn].concat();
+            vec.extend_from_slice(vt);
+            vec
+        }).flatten().collect::<Vec<_>>();
+
+        // Create index data
+        let mut indices: Vec<u16> = Vec::new();
+        // For each quadrilateral in the sphere, indexed by its bottom-left vertex
+        for x in 0..x_res {
+            for y in 0..y_res {
+                let column_length = y_res + 1;
+                let bottom_left = x * column_length + y;
+                let top_left = bottom_left + 1;
+                let bottom_right = if x == x_res - 1 { y } else { bottom_left + column_length };
+                let top_right = bottom_right + 1;
+                // Output two triangles to make up quad
+                indices.extend([bottom_left, top_left, top_right, top_right, bottom_right, bottom_left]);
+            }
+        }
+
         let terrain = DynamicBuffer::new(vulkan, &vertices)?;
+        let indices = DynamicBuffer::new(vulkan, &indices)?;
         let texture = Texture::new(&vulkan, "res/grid.jpg")?;
-        Ok (Asteroid { asteroid_type, size, region: Region::new(size), heightmap, perlin, terrain, texture })
+        Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture })
     }
 
     pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
         unsafe {
-            let scale = 10.0;
-            let model = Translation3::from([scale / -2.0, 6.0, scale / -2.0]).to_homogeneous()
+            let model = Translation3::from([0.0, 5.0, 0.0]).to_homogeneous();
                 // * Rotation3::from_axis_angle(&Vector3::x_axis(), 0.2).to_homogeneous()
-                * Scale3::from([scale / self.heightmap.width as f32, -3.0, scale / self.heightmap.height as f32]).to_homogeneous();
+                // * Scale3::from([scale, -3.0, scale]).to_homogeneous();
             let data = [model.as_slice(), view_projection.as_slice()].concat();
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
@@ -80,7 +102,8 @@ impl Asteroid {
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
-            vulkan.device.cmd_draw(cmdbuf, self.terrain.len, 1, 0, 0)
+            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT16);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
         }
     }
 }
@@ -110,6 +133,7 @@ impl Perlin3D {
             Vector3::from([0.0, -1.0, -1.0])
         ].iter().map(|v| v.normalize()).collect::<Vec<_>>();
         let mut hasher = hash_map::DefaultHasher::new();
+        self.seed.hash(&mut hasher);
         x.hash(&mut hasher);
         y.hash(&mut hasher);
         z.hash(&mut hasher);
