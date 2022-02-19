@@ -14,6 +14,7 @@ mod system;
 mod texture;
 mod player;
 mod buffer;
+mod physics;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");

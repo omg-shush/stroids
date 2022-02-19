@@ -24,7 +24,7 @@ void main() {
     float distance_weight = 1.0 / (length(to_light) * length(to_light));
     float point = max(dot(to_light, normal.xyz), 0.0) * distance_weight * strength;
 
-    float litness = point * 0.99 + directional * 0.0 + 0.01;
+    float litness = point * 0.98 + directional * 0.0 + 0.02;
     litness = litness / (1.0 + litness);
 
     if (!pc.do_lighting) {
@@ -32,5 +32,7 @@ void main() {
     }
 
     vec4 color = texture(tex, uv);
-    outColor = vec4(litness * color.rgb, color.a);
+    float b = clamp(length(texture(tex, uv / 20.0).rgb), 0.0, 1.0);
+
+    outColor = vec4(litness * b * color.rgb, color.a);
 }

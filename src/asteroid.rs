@@ -1,16 +1,13 @@
 use std::collections::hash_map;
 use std::error::Error;
-use std::f32::consts::{PI, FRAC_PI_2};
-use std::fs::File;
+use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
-use std::io::BufReader;
 use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
 
 use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType};
-use nalgebra::{Matrix4, Vector3, Translation3, Scale3, Rotation3};
-use obj::{Obj, TexturedVertex, load_obj};
+use nalgebra::{Matrix4, Vector3, Translation3, Rotation3};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
@@ -39,7 +36,7 @@ impl Asteroid {
         let perlin = Perlin3D::new(0);
 
         // Create vertices of sphere
-        let (x_res, y_res) = (100, 50);
+        let (x_res, y_res) = (200, 100);
         let mut sphere_vertices: Vec<([f32; 3], [f32; 3], [f32; 2])> = Vec::new();
         for x in 0..x_res {
             let azimuth = x as f32 / x_res as f32 * 2.0 * PI;
@@ -47,27 +44,21 @@ impl Asteroid {
                 let altitude = y as f32 / y_res as f32 * PI - PI / 2.0;
                 let position = Rotation3::from_euler_angles(0.0, altitude, azimuth) * Vector3::from([1.0, 0.0, 0.0]);
                 let normal = position.normalize();
-                let uv = [azimuth, altitude];
+                let uv = [20.0 * x as f32 / x_res as f32, 20.0 * y as f32 / y_res as f32];
                 sphere_vertices.push((position.as_slice().try_into().unwrap(), normal.as_slice().try_into().unwrap(), uv));
             }
         }
 
-
-        // Create vertex data
-        let vertices = sphere_vertices.iter().map(|(v, vn, vt)| {
-            // Offset sphere's vertices using noise
+        // Offset sphere's vertices using noise
+        let v_uv: Vec<([f32; 3], [f32; 2])> = sphere_vertices.iter().map(|(v, _vn, vt)| {
             let position = Vector3::from(*v);
             let height =
                 0.05 * perlin.sample(position * 55.0)
                 + 0.20 * perlin.sample(position * 37.0)
-                + 0.75 * perlin.sample(position * 2.0);
+                + 0.75 * perlin.sample(position * 2.7);
             let offset_position = position * (1.0 + 0.3 * height);
-
-            // Store resulting vertex data
-            let mut vec = [offset_position.as_slice(), vn].concat();
-            vec.extend_from_slice(vt);
-            vec
-        }).flatten().collect::<Vec<_>>();
+            (offset_position.as_slice().try_into().unwrap(), *vt)
+        }).collect::<Vec<_>>();
 
         // Create index data
         let mut indices: Vec<u16> = Vec::new();
@@ -84,9 +75,30 @@ impl Asteroid {
             }
         }
 
+        // Recompute normal of each triangle and add it to each contained vertex
+        let mut normals = vec![Vector3::zeros(); v_uv.len()];
+        for i in (0..indices.len()).step_by(3) {
+            let (a, b, c) = (
+                Vector3::from(v_uv[indices[i] as usize].0),
+                Vector3::from(v_uv[indices[i + 1] as usize].0),
+                Vector3::from(v_uv[indices[i + 2] as usize].0));
+            let normal = (b - a).cross(&(c - a));
+            normals[indices[i] as usize] += normal;
+            normals[indices[i + 1] as usize] += normal;
+            normals[indices[i + 2] as usize] += normal;
+        }
+
+        // Renormalize vertex normals and finalize vertex data
+        let mut vertices = Vec::new();
+        for i in 0..v_uv.len() {
+            vertices.extend_from_slice(&v_uv[i].0);
+            vertices.extend_from_slice(normals[i].normalize().as_slice());
+            vertices.extend_from_slice(&v_uv[i].1);
+        }
+
         let terrain = DynamicBuffer::new(vulkan, &vertices)?;
         let indices = DynamicBuffer::new(vulkan, &indices)?;
-        let texture = Texture::new(&vulkan, "res/grid.jpg")?;
+        let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
         Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture })
     }
 
