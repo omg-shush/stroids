@@ -11,6 +11,7 @@ use nalgebra::{Matrix4, Vector3, Translation3, Rotation3};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
+use crate::physics::{PhysicsEngine, Entity, EntityProperties};
 use crate::region::Region;
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
@@ -28,11 +29,12 @@ pub struct Asteroid {
     region: Region,
     terrain: DynamicBuffer,
     indices: DynamicBuffer,
-    texture: Texture
+    texture: Texture,
+    entity: Entity
 }
 
 impl Asteroid {
-    pub fn new(vulkan: &VulkanInstance, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
+    pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
         let perlin = Perlin3D::new(0);
 
         // Create vertices of sphere
@@ -99,12 +101,17 @@ impl Asteroid {
         let terrain = DynamicBuffer::new(vulkan, &vertices)?;
         let indices = DynamicBuffer::new(vulkan, &indices)?;
         let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
-        Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture })
+
+        let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
+        physics.set_entity(entity).position = Vector3::from([0.0, 5.0, 0.0]);
+        physics.set_entity(entity).mass = 100_000.0;
+
+        Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture, entity })
     }
 
-    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
+    pub fn render(&self, vulkan: &VulkanInstance, physics: &PhysicsEngine, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
         unsafe {
-            let model = Translation3::from([0.0, 5.0, 0.0]).to_homogeneous();
+            let model = Translation3::from(physics.get_entity(self.entity).position).to_homogeneous();
                 // * Rotation3::from_axis_angle(&Vector3::x_axis(), 0.2).to_homogeneous()
                 // * Scale3::from([scale, -3.0, scale]).to_homogeneous();
             let data = [model.as_slice(), view_projection.as_slice()].concat();

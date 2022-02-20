@@ -10,6 +10,7 @@ use winit::window::{WindowBuilder, Window};
 use ash::vk::{PipelineStageFlags, SubmitInfo};
 
 use crate::asteroid::Asteroid;
+use crate::physics::PhysicsEngine;
 use crate::player::Player;
 use crate::system::System;
 use crate::vulkan::vulkan_instance::VulkanInstance;
@@ -32,11 +33,10 @@ impl App {
         })
     }
 
-    pub fn run(self, mut vulkan: VulkanInstance, asteroid: Asteroid, system: System) {
+    pub fn run(self, mut vulkan: VulkanInstance, asteroid: Asteroid, system: System, mut physics: PhysicsEngine, mut player: Player) {
         self.window.set_cursor_grab(true).expect("Failed to grab cursor");
         self.window.set_cursor_visible(false);
 
-        let mut player = Player::new(&vulkan).expect("Failed to create player");
         let time_start = Instant::now();
         let mut last_frame = time_start;
         let mut last_second = time_start;
@@ -95,18 +95,19 @@ impl App {
                     fps += 1;
                     if now - last_second > Duration::from_secs(1) {
                         last_second = now;
-                        println!("FPS: {:}", fps);
+                        println!("FPS: {}", fps);
                         fps = 0;
                     }
 
                     // Update
-                    player.update(&keys, delta_time);
+                    player.update(&mut physics, &keys, delta_time);
+                    physics.time_step(delta_time);
 
                     // Rewrite command buffer
                     let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");
 
                     let (view, view_rot) = {
-                        let pos = player.position + player.camera.transform_vector(&Vector3::from([0.0, -0.08, 0.5]));
+                        let pos = physics.get_entity(player.entity).position + player.camera.transform_vector(&Vector3::from([0.0, -0.08, 0.5]));
                         let t = Translation3::from(-1.0 * pos);
                         let r = player.camera.inverse().to_rotation_matrix();
                         (r.to_homogeneous() * t.to_homogeneous(), r.to_homogeneous())
@@ -117,8 +118,8 @@ impl App {
 
                     // Render
                     system.render(&vulkan, cmdbuf, view, view_rot, projection, time);
-                    asteroid.render(&vulkan, cmdbuf, projection * view);
-                    player.render(&vulkan, cmdbuf, (projection * view).as_slice());
+                    asteroid.render(&vulkan, &physics, cmdbuf, projection * view);
+                    player.render(&vulkan, &physics, cmdbuf, (projection * view).as_slice());
 
                     unsafe {
                         vulkan.device.cmd_end_render_pass(cmdbuf);

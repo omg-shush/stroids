@@ -10,21 +10,21 @@ use obj::{Obj, TexturedVertex, load_obj};
 use winit::event::VirtualKeyCode;
 
 use crate::buffer::DynamicBuffer;
+use crate::physics::{PhysicsEngine, Entity, EntityProperties};
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 
 pub struct Player {
     pub camera: UnitQuaternion<f32>,
     pub orientation: UnitQuaternion<f32>,
-    pub velocity: Vector3<f32>,
-    pub position: Vector3<f32>,
     vertices: DynamicBuffer,
     indices: DynamicBuffer,
-    texture: Texture
+    texture: Texture,
+    pub entity: Entity
 }
 
 impl Player {
-    pub fn new(vulkan: &VulkanInstance) -> Result<Player, Box<dyn Error>> {
+    pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine) -> Result<Player, Box<dyn Error>> {
         let file = BufReader::new(File::open("res/rocket.obj")?);
         let rocket: Obj<TexturedVertex> = load_obj(file)?;
 
@@ -32,7 +32,6 @@ impl Player {
 
         let camera = UnitQuaternion::identity();
         let orientation = UnitQuaternion::identity();
-        let velocity = Vector3::zeros();
 
         // Allocate & write vertex/index buffers
         let vertices = rocket.vertices.iter().map(|v| {
@@ -43,19 +42,26 @@ impl Player {
         let vertices = DynamicBuffer::new(vulkan, &vertices)?;
         let indices = DynamicBuffer::new(vulkan, &rocket.indices)?;
 
+        let entity = physics.add_entity(EntityProperties { immovable: false, collision: false, gravitational: false });
+        physics.set_entity(entity).position = Vector3::from([0.0, 4.0, 0.0]);
+        physics.set_entity(entity).mass = 1.0;
+
         Ok (Player {
-            camera, orientation, velocity, position: Vector3::from([0.0, 4.0, 0.0]),
+            camera, orientation,
             vertices, indices,
-            texture
+            texture,
+            entity
         })
     }
 
-    pub fn update(&mut self, keys: &HashMap<VirtualKeyCode, bool>, delta_time: f32) {
+    pub fn update(&mut self, physics: &mut PhysicsEngine, keys: &HashMap<VirtualKeyCode, bool>, delta_time: f32) {
         let _rocket_x_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::x()));
         let rocket_y_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::y()));
         let rocket_z_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::z()));
 
-        self.position += self.velocity * delta_time;
+        let entity = physics.set_entity(self.entity);
+
+        entity.position += entity.velocity * delta_time;
 
         let rotation =
             if *keys.get(&VirtualKeyCode::A).unwrap_or(&false) {
@@ -74,18 +80,19 @@ impl Player {
 
         if *keys.get(&VirtualKeyCode::W).unwrap_or(&false) {
             self.orientation = UnitQuaternion::new_normalize(self.orientation.lerp(&self.camera, 0.07));
-            self.velocity += rocket_z_axis.scale(-0.4 * delta_time);
+            entity.velocity += rocket_z_axis.scale(-0.4 * delta_time);
         } else if *keys.get(&VirtualKeyCode::S).unwrap_or(&false) {
-            if self.velocity.norm() > 0.001 {
-                let inverse_momentum = UnitQuaternion::look_at_rh(&(-1.0 * self.velocity), &self.velocity.cross(&self.orientation.transform_vector(&Vector3::x_axis())));
+            if entity.velocity.norm() > 0.001 {
+                let inverse_momentum = UnitQuaternion::look_at_rh(&(-1.0 * entity.velocity), &entity.velocity.cross(&self.orientation.transform_vector(&Vector3::x_axis())));
                 self.orientation = self.orientation.try_slerp(&inverse_momentum, 0.07, 0.01).unwrap_or_else(||
                     UnitQuaternion::new_normalize(self.orientation.lerp(&inverse_momentum, 0.07)));
-                }
-            self.velocity *= 0.6f32.powf(delta_time);
+            }
+            entity.velocity *= 0.6f32.powf(delta_time);
         }
     }
 
-    pub fn render(&self, vulkan: &VulkanInstance, cmdbuf: CommandBuffer, vp: &[f32]) {
+    pub fn render(&self, vulkan: &VulkanInstance, physics: &PhysicsEngine, cmdbuf: CommandBuffer, vp: &[f32]) {
+        let entity = physics.get_entity(self.entity);
         unsafe {
             let data = 0u32.to_ne_bytes(); // Turn lighting off for skybox
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::FRAGMENT, 128, &data);
@@ -96,7 +103,7 @@ impl Player {
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
 
-            let model = Translation3::from(self.position).to_homogeneous()
+            let model = Translation3::from(entity.position).to_homogeneous()
                 * self.orientation.to_homogeneous()
                 * Rotation3::rotation_between(&Vector3::z(), &Vector3::y()).unwrap().to_homogeneous() // TODO why option?
                 * Scale3::from([0.02, 0.02, 0.02]).to_homogeneous();
