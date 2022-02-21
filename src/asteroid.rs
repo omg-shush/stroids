@@ -11,7 +11,7 @@ use nalgebra::{Matrix4, Vector3, Translation3, Rotation3};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
-use crate::physics::{PhysicsEngine, Entity, EntityProperties};
+use crate::physics::{PhysicsEngine, Entity, EntityProperties, Mesh};
 use crate::region::Region;
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
@@ -84,7 +84,7 @@ impl Asteroid {
                 Vector3::from(v_uv[indices[i] as usize].0),
                 Vector3::from(v_uv[indices[i + 1] as usize].0),
                 Vector3::from(v_uv[indices[i + 2] as usize].0));
-            let normal = (b - a).cross(&(c - a));
+            let normal = (b - a).cross(&(c - a)).normalize();
             normals[indices[i] as usize] += normal;
             normals[indices[i + 1] as usize] += normal;
             normals[indices[i + 2] as usize] += normal;
@@ -98,13 +98,15 @@ impl Asteroid {
             vertices.extend_from_slice(&v_uv[i].1);
         }
 
-        let terrain = DynamicBuffer::new(vulkan, &vertices)?;
-        let indices = DynamicBuffer::new(vulkan, &indices)?;
-        let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
-
         let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
         physics.set_entity(entity).position = Vector3::from([0.0, 5.0, 0.0]);
         physics.set_entity(entity).mass = 100_000.0;
+        let mesh = Mesh::new(v_uv.iter().map(|t| Vector3::from(t.0)).collect::<Vec<_>>(), indices.clone());
+        physics.set_entity(entity).mesh.push(mesh);
+
+        let terrain = DynamicBuffer::new(vulkan, &vertices)?;
+        let indices = DynamicBuffer::new(vulkan, &indices)?;
+        let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
 
         Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture, entity })
     }

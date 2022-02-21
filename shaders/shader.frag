@@ -34,5 +34,5 @@ void main() {
     vec4 color = texture(tex, uv);
     float b = clamp(length(texture(tex, uv / 20.0).rgb), 0.0, 1.0);
 
-    outColor = vec4(litness * b * color.rgb, color.a);
+    outColor = vec4(litness * color.rgb, color.a);
 }

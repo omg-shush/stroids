@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::f32::consts::PI;
 use std::slice;
 use std::error::Error;
 use std::fs::File;
@@ -25,10 +26,10 @@ pub struct Player {
 
 impl Player {
     pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine) -> Result<Player, Box<dyn Error>> {
-        let file = BufReader::new(File::open("res/rocket.obj")?);
+        let file = BufReader::new(File::open("res/rover.obj")?);
         let rocket: Obj<TexturedVertex> = load_obj(file)?;
 
-        let texture = Texture::new(vulkan, "res/rocket.png")?;
+        let texture = Texture::new(vulkan, "res/rover.png")?;
 
         let camera = UnitQuaternion::identity();
         let orientation = UnitQuaternion::identity();
@@ -43,7 +44,7 @@ impl Player {
         let indices = DynamicBuffer::new(vulkan, &rocket.indices)?;
 
         let entity = physics.add_entity(EntityProperties { immovable: false, collision: false, gravitational: false });
-        physics.set_entity(entity).position = Vector3::from([0.0, 4.0, 0.0]);
+        physics.set_entity(entity).position = Vector3::from([0.05, 3.68, 0.05]);
         physics.set_entity(entity).mass = 1.0;
 
         Ok (Player {
@@ -80,9 +81,9 @@ impl Player {
 
         if *keys.get(&VirtualKeyCode::W).unwrap_or(&false) {
             self.orientation = UnitQuaternion::new_normalize(self.orientation.lerp(&self.camera, 0.07));
-            entity.velocity += rocket_z_axis.scale(-0.4 * delta_time);
+            entity.velocity += rocket_z_axis.scale(-0.15 * delta_time);
         } else if *keys.get(&VirtualKeyCode::S).unwrap_or(&false) {
-            if entity.velocity.norm() > 0.001 {
+            if entity.velocity.norm() > 0.01 {
                 let inverse_momentum = UnitQuaternion::look_at_rh(&(-1.0 * entity.velocity), &entity.velocity.cross(&self.orientation.transform_vector(&Vector3::x_axis())));
                 self.orientation = self.orientation.try_slerp(&inverse_momentum, 0.07, 0.01).unwrap_or_else(||
                     UnitQuaternion::new_normalize(self.orientation.lerp(&inverse_momentum, 0.07)));
@@ -105,8 +106,10 @@ impl Player {
 
             let model = Translation3::from(entity.position).to_homogeneous()
                 * self.orientation.to_homogeneous()
-                * Rotation3::rotation_between(&Vector3::z(), &Vector3::y()).unwrap().to_homogeneous() // TODO why option?
-                * Scale3::from([0.02, 0.02, 0.02]).to_homogeneous();
+                * Rotation3::from_axis_angle(&Vector3::z_axis(), PI).to_homogeneous()
+                // * Rotation3::rotation_between(&Vector3::x(), &Vector3::y()).unwrap().to_homogeneous() // TODO why option?
+                * Scale3::from([0.02, 0.02, 0.02]).to_homogeneous()
+                * Translation3::from([0.0, 0.21, 0.0]).to_homogeneous();
             let data = [model.as_slice(), vp].concat();
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);

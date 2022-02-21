@@ -107,7 +107,7 @@ impl App {
                     let cmdbuf = vulkan.begin_commands().expect("Failed to begin recording commands");
 
                     let (view, view_rot) = {
-                        let pos = physics.get_entity(player.entity).position + player.camera.transform_vector(&Vector3::from([0.0, -0.08, 0.5]));
+                        let pos = physics.get_entity(player.entity).position + player.camera.transform_vector(&Vector3::from([-0.015, 0.0, 0.2]));
                         let t = Translation3::from(-1.0 * pos);
                         let r = player.camera.inverse().to_rotation_matrix();
                         (r.to_homogeneous() * t.to_homogeneous(), r.to_homogeneous())
