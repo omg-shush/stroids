@@ -49,7 +49,7 @@ impl PhysicsEngine {
     pub fn time_step(&mut self, duration: f32) {
         let forces = self.forces();
         self.euler(duration, forces);
-        let collisions = self.collide();
+        self.collide();
     }
 
     // Returns the current force applied to every entity
@@ -222,18 +222,24 @@ impl Mesh {
 
     // Returns list of triangle intersections within this mesh along the ray
     pub fn intersect_ray(&self, source: Vector3<f32>, dest: Vector3<f32>) -> Vec<(Vector3<f32>, Vector3<f32>, f32)> {
-        let length = (dest - source).norm();
         let mut intersections = Vec::new();
         for i in (0..self.indices.len()).step_by(3) {
-            let (a, b, c) = (
+            let (a, b, c) = ( // For each triangle in mesh
                 self.vertices[self.indices[i] as usize],
                 self.vertices[self.indices[i + 1] as usize],
                 self.vertices[self.indices[i + 2] as usize]);
             let normal = (b - a).cross(&(c - a)).normalize();
-            let dist_from_dest = (dest - a).dot(&normal);
-            let projected = dest - (dist_from_dest * normal);
-            if dist_from_dest <= length && Mesh::projected_within_triangle(projected, a, b, c) {
-                intersections.push((projected, normal, dist_from_dest))
+
+            // Intersect line of ray with plane of triangle
+            // Ray: source + alpha * (dest - source) = point
+            // Plane: (point - a) . normal = 0
+            // alpha = ((a - source) . normal) / ((dest - source) . normal)
+            let alpha = ((a - source).dot(&normal)) / ((dest - source).dot(&normal));
+            if alpha >= 0.0 && alpha <= 1.0 { // alpha = 0 means source on plane; alpha = 1 means dest on plane; alpha c [0, 1] means ray intersects plane
+                let point = source + alpha * (dest - source);
+                if Mesh::projected_within_triangle(point, a, b, c) {
+                    intersections.push((point, normal, (dest - point).norm()));
+                }
             }
         }
         intersections
