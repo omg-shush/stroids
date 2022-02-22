@@ -21,6 +21,8 @@ pub struct EntityState {
     pub mesh: Vec<Mesh>
 }
 
+type Collision = (Entity, Entity, Vector3<f32>, Vector3<f32>);
+
 impl PhysicsEngine {
     pub fn new() -> PhysicsEngine {
         PhysicsEngine {
@@ -49,7 +51,8 @@ impl PhysicsEngine {
     pub fn time_step(&mut self, duration: f32) {
         let forces = self.forces();
         self.euler(duration, forces);
-        self.collide();
+        let collisions = self.collide();
+        self.resolve(collisions);
     }
 
     // Returns the current force applied to every entity
@@ -73,9 +76,18 @@ impl PhysicsEngine {
         forces
     }
 
-    fn collide(&mut self) {
-        let mut collisions: Vec<(Entity, Entity, Vector3<f32>, Vector3<f32>)> = Vec::new();
+    fn resolve(&mut self, collisions: Vec<Collision>) {
+        for (e, other, projected, normal) in collisions {
+            let other_position = self.entity[other].position;
+            let entity = &mut self.entity[e];
+            entity.position = projected + other_position; // TODO for now, move back to surface of triangle
+            // Reflect vector off triangle's plane, with a restitution factor
+            entity.velocity -= 2.0 * (0.4 * normal * normal.dot(&entity.velocity));
+        }
+    }
 
+    fn collide(&mut self) -> Vec<Collision> {
+        let mut collisions: Vec<Collision> = Vec::new();
         for e in 0..self.entity_count {
             let entity = &self.entity[e];
             let properties = &self.entity_properties[e];
@@ -150,13 +162,7 @@ impl PhysicsEngine {
                 }
             }
         }
-
-        for (e, other, projected, normal) in collisions {
-            let other_position = self.entity[other].position;
-            let entity = &mut self.entity[e];
-            entity.position = projected + other_position; // TODO for now, move back to surface of triangle
-            entity.velocity -= normal * normal.dot(&entity.velocity) // ... and remove any velocity in the direction of the triangle's normal
-        }
+        collisions
     }
 
     fn box_intersect(min1: Vector3<f32>, max1: Vector3<f32>, min2: Vector3<f32>, max2: Vector3<f32>) -> bool {
