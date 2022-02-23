@@ -2,12 +2,13 @@ use std::collections::hash_map;
 use std::error::Error;
 use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
 
 use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType};
-use nalgebra::{Matrix4, Vector3, Translation3, Rotation3};
+use nalgebra::{Matrix4, Vector3, Translation3, Rotation3, UnitQuaternion};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
@@ -99,10 +100,27 @@ impl Asteroid {
         }
 
         let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
-        physics.set_entity(entity).position = Vector3::from([0.0, 5.0, 0.0]);
-        physics.set_entity(entity).mass = 100_000.0;
-        let mesh = Mesh::new(v_uv.iter().map(|t| Vector3::from(t.0)).collect::<Vec<_>>(), indices.clone());
-        physics.set_entity(entity).mesh.push(mesh);
+        let set_entity = physics.set_entity(entity);
+        set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
+        set_entity.rotation = UnitQuaternion::identity();
+        set_entity.scale = Vector3::from([1.0, 1.0, 1.0]);
+        set_entity.mass = 100_000.0;
+
+        set_entity.vertices = Rc::new(v_uv.iter().map(|t| Vector3::from(t.0)).collect::<Vec<_>>());
+        let step_size = 20;
+        for x in (0..x_res).step_by(step_size) {
+            for y in (0..y_res).step_by(step_size) {
+                let mut subindices = Vec::new();
+                for i in x..(x + step_size as u16) {
+                    for j in y..(y + step_size as u16) {
+                        let start = (i as usize * y_res as usize + j as usize) * 6;
+                        subindices.extend_from_slice(&indices[start..start + 6]);
+                    }
+                }
+                let mesh = Mesh::new(set_entity.vertices.clone(), subindices);
+                set_entity.mesh.push(mesh);
+            }
+        }
 
         let terrain = DynamicBuffer::new(vulkan, &vertices)?;
         let indices = DynamicBuffer::new(vulkan, &indices)?;
@@ -114,8 +132,6 @@ impl Asteroid {
     pub fn render(&self, vulkan: &VulkanInstance, physics: &PhysicsEngine, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
         unsafe {
             let model = Translation3::from(physics.get_entity(self.entity).position).to_homogeneous();
-                // * Rotation3::from_axis_angle(&Vector3::x_axis(), 0.2).to_homogeneous()
-                // * Scale3::from([scale, -3.0, scale]).to_homogeneous();
             let data = [model.as_slice(), view_projection.as_slice()].concat();
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);

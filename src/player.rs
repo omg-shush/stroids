@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::rc::Rc;
 use std::slice;
 use std::error::Error;
 use std::fs::File;
@@ -11,13 +12,12 @@ use obj::{Obj, TexturedVertex, load_obj};
 use winit::event::VirtualKeyCode;
 
 use crate::buffer::DynamicBuffer;
-use crate::physics::{PhysicsEngine, Entity, EntityProperties};
+use crate::physics::{PhysicsEngine, Entity, EntityProperties, Mesh};
 use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 
 pub struct Player {
     pub camera: UnitQuaternion<f32>,
-    pub orientation: UnitQuaternion<f32>,
     vertices: DynamicBuffer,
     indices: DynamicBuffer,
     texture: Texture,
@@ -32,7 +32,6 @@ impl Player {
         let texture = Texture::new(vulkan, "res/rover.png")?;
 
         let camera = UnitQuaternion::identity();
-        let orientation = UnitQuaternion::identity();
 
         // Allocate & write vertex/index buffers
         let vertices = rocket.vertices.iter().map(|v| {
@@ -45,10 +44,19 @@ impl Player {
 
         let entity = physics.add_entity(EntityProperties { immovable: false, collision: false, gravitational: false });
         physics.set_entity(entity).position = Vector3::from([0.05, 3.68, 0.05]);
+        physics.set_entity(entity).scale = Vector3::from([0.02, 0.02, 0.02]);
         physics.set_entity(entity).mass = 1.0;
+        let physics_vertices = Rc::new(vec![
+            Vector3::from([-1.0, 0.0, -1.0]),
+            Vector3::from([-1.0, 0.0, 1.0]),
+            Vector3::from([1.0, 0.0, 1.0]),
+            Vector3::from([1.0, 0.0, -1.0])]);
+        let physics_indices = vec![0, 1, 2, 2, 3, 0];
+        physics.set_entity(entity).vertices = physics_vertices.clone();
+        physics.set_entity(entity).mesh.push(Mesh::new(physics_vertices, physics_indices));
 
         Ok (Player {
-            camera, orientation,
+            camera,
             vertices, indices,
             texture,
             entity
@@ -56,13 +64,11 @@ impl Player {
     }
 
     pub fn update(&mut self, physics: &mut PhysicsEngine, keys: &HashMap<VirtualKeyCode, bool>, delta_time: f32) {
-        let _rocket_x_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::x()));
-        let rocket_y_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::y()));
-        let rocket_z_axis = UnitVector3::new_normalize(self.orientation.transform_vector(&Vector3::z()));
-
         let entity = physics.set_entity(self.entity);
 
-        entity.position += entity.velocity * delta_time;
+        let _rocket_x_axis = UnitVector3::new_normalize(entity.rotation.transform_vector(&Vector3::x()));
+        let rocket_y_axis = UnitVector3::new_normalize(entity.rotation.transform_vector(&Vector3::y()));
+        let rocket_z_axis = UnitVector3::new_normalize(entity.rotation.transform_vector(&Vector3::z()));
 
         let rotation =
             if *keys.get(&VirtualKeyCode::A).unwrap_or(&false) {
@@ -76,17 +82,17 @@ impl Player {
             } else {
                 UnitQuaternion::identity()
             };
-        self.orientation = rotation * self.orientation;
+        entity.rotation = rotation * entity.rotation;
         self.camera = rotation * self.camera;
 
         if *keys.get(&VirtualKeyCode::W).unwrap_or(&false) {
-            self.orientation = UnitQuaternion::new_normalize(self.orientation.lerp(&self.camera, 0.07));
+            entity.rotation = UnitQuaternion::new_normalize(entity.rotation.lerp(&self.camera, 0.07));
             entity.velocity += rocket_z_axis.scale(-0.15 * delta_time);
         } else if *keys.get(&VirtualKeyCode::S).unwrap_or(&false) {
             if entity.velocity.norm() > 0.01 {
-                let inverse_momentum = UnitQuaternion::look_at_rh(&(-1.0 * entity.velocity), &entity.velocity.cross(&self.orientation.transform_vector(&Vector3::x_axis())));
-                self.orientation = self.orientation.try_slerp(&inverse_momentum, 0.07, 0.01).unwrap_or_else(||
-                    UnitQuaternion::new_normalize(self.orientation.lerp(&inverse_momentum, 0.07)));
+                let inverse_momentum = UnitQuaternion::look_at_rh(&(-1.0 * entity.velocity), &entity.velocity.cross(&entity.rotation.transform_vector(&Vector3::x_axis())));
+                entity.rotation = entity.rotation.try_slerp(&inverse_momentum, 0.07, 0.01).unwrap_or_else(||
+                    UnitQuaternion::new_normalize(entity.rotation.lerp(&inverse_momentum, 0.07)));
             }
             entity.velocity *= 0.6f32.powf(delta_time);
         }
@@ -105,11 +111,11 @@ impl Player {
                 1, &[self.texture.descriptor_set], &[]);
 
             let model = Translation3::from(entity.position).to_homogeneous()
-                * self.orientation.to_homogeneous()
+                * entity.rotation.to_homogeneous()
                 * Rotation3::from_axis_angle(&Vector3::z_axis(), PI).to_homogeneous()
                 // * Rotation3::rotation_between(&Vector3::x(), &Vector3::y()).unwrap().to_homogeneous() // TODO why option?
-                * Scale3::from([0.02, 0.02, 0.02]).to_homogeneous()
-                * Translation3::from([0.0, 0.21, 0.0]).to_homogeneous();
+                * Scale3::from(entity.scale).to_homogeneous();
+                // * Translation3::from([0.0, 0.21, 0.0]).to_homogeneous();
             let data = [model.as_slice(), vp].concat();
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
