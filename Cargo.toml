@@ -14,5 +14,7 @@ obj-rs = "0.7.0"
 image = "0.23.14"
 rand = "0.8.4"
 
-[profile.dev.package.image] # Optimize dependencies in debug mode
+[profile.dev]
+opt-level = 2
+[profile.dev.package."*"] # Optimize dependencies in debug mode
 opt-level = 3

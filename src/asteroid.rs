@@ -7,7 +7,7 @@ use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
 
-use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType};
+use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType, BufferUsageFlags};
 use nalgebra::{Matrix4, Vector3, Translation3, Rotation3, UnitQuaternion};
 use rand::{thread_rng, Rng};
 
@@ -122,8 +122,8 @@ impl Asteroid {
             }
         }
 
-        let terrain = DynamicBuffer::new(vulkan, &vertices)?;
-        let indices = DynamicBuffer::new(vulkan, &indices)?;
+        let terrain = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
+        let indices = DynamicBuffer::new(vulkan, &indices, BufferUsageFlags::INDEX_BUFFER)?;
         let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
 
         Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture, entity })

@@ -118,8 +118,8 @@ impl System {
             vec.extend_from_slice(&v.texture[..2]);
             vec
         }).flatten().collect::<Vec<_>>();
-        let vertices = DynamicBuffer::new(vulkan, &vertices)?;
-        let indices = DynamicBuffer::new(vulkan, &sphere.indices)?;
+        let vertices = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
+        let indices = DynamicBuffer::new(vulkan, &sphere.indices, BufferUsageFlags::INDEX_BUFFER)?;
 
         // Allocate uniform buffers
         let (uniform_buffers, uniform_allocations) = vulkan.allocator.allocate_buffer_chain(

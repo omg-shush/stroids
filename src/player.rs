@@ -6,7 +6,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
 
-use ash::vk::{CommandBuffer, PipelineBindPoint, ShaderStageFlags, IndexType};
+use ash::vk::{CommandBuffer, PipelineBindPoint, ShaderStageFlags, IndexType, BufferUsageFlags};
 use nalgebra::{UnitQuaternion, Translation3, Vector3, Scale3, Rotation3, UnitVector3};
 use obj::{Obj, TexturedVertex, load_obj};
 use winit::event::VirtualKeyCode;
@@ -39,8 +39,8 @@ impl Player {
             vec.extend_from_slice(&v.texture[..2]);
             vec
         }).flatten().collect::<Vec<_>>();
-        let vertices = DynamicBuffer::new(vulkan, &vertices)?;
-        let indices = DynamicBuffer::new(vulkan, &rocket.indices)?;
+        let vertices = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
+        let indices = DynamicBuffer::new(vulkan, &rocket.indices, BufferUsageFlags::INDEX_BUFFER)?;
 
         let entity = physics.add_entity(EntityProperties { immovable: false, collision: false, gravitational: false });
         physics.set_entity(entity).position = Vector3::from([0.05, 3.68, 0.05]);
