@@ -17,6 +17,7 @@ mod texture;
 mod player;
 mod buffer;
 mod physics;
+mod marching_cubes;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");

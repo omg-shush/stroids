@@ -12,6 +12,7 @@ use nalgebra::{Matrix4, Vector3, Translation3, Rotation3, UnitQuaternion};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
+use crate::marching_cubes::MarchingCubes;
 use crate::physics::{PhysicsEngine, Entity, EntityProperties, Mesh};
 use crate::region::Region;
 use crate::texture::Texture;
@@ -37,6 +38,7 @@ pub struct Asteroid {
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
         let perlin = Perlin3D::new(0);
+        let marching_cubes = MarchingCubes::new();
 
         // Create vertices of sphere
         let (x_res, y_res) = (200, 100);
