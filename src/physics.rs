@@ -198,11 +198,12 @@ pub struct Mesh {
     pub bounding_min: Vector3<f32>, // Contains all vertices in this portion of mesh
     pub bounding_max: Vector3<f32>,
     vertices: Rc<Vec<Vector3<f32>>>,
-    indices: Vec<u16> // Vertices given in clockwise order
+    indices: Vec<u32> // Vertices given in clockwise order
 }
 
 impl Mesh {
-    pub fn new(vertices: Rc<Vec<Vector3<f32>>>, indices: Vec<u16>) -> Mesh {
+    // Assumes indices is nonempty
+    pub fn new(vertices: Rc<Vec<Vector3<f32>>>, indices: Vec<u32>) -> Mesh {
         let (mut bounding_min, mut bounding_max) = (vertices[indices[0] as usize], vertices[indices[0] as usize]);
         for index in indices.iter() {
             let vertex = vertices[*index as usize];
@@ -215,7 +216,7 @@ impl Mesh {
     // Returns an iterator over all the triangles in this mesh, represented by triples of vertices
     pub fn triangles(&self) -> impl Iterator<Item = [&Vector3<f32>; 3]> {
         self.indices.chunks(3).map(|indices| {
-            let [i, j, k]: [u16; 3] = indices.try_into().unwrap();
+            let [i, j, k]: [u32; 3] = indices.try_into().unwrap();
             [&self.vertices[i as usize], &self.vertices[j as usize], &self.vertices[k as usize]]
         })
     }

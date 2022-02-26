@@ -1,6 +1,5 @@
 use std::collections::hash_map;
 use std::error::Error;
-use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::slice;
@@ -8,7 +7,7 @@ use std::cmp::Ordering::Equal;
 use std::convert::From;
 
 use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType, BufferUsageFlags};
-use nalgebra::{Matrix4, Vector3, Translation3, Rotation3, UnitQuaternion};
+use nalgebra::{Matrix4, Vector3, Translation3, UnitQuaternion, vector, Scale3};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
@@ -37,56 +36,40 @@ pub struct Asteroid {
 
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
-        let perlin = Perlin3D::new(0);
         let marching_cubes = MarchingCubes::new();
 
-        // Create vertices of sphere
-        let (x_res, y_res) = (200, 100);
-        let mut sphere_vertices: Vec<([f32; 3], [f32; 3], [f32; 2])> = Vec::new();
-        for x in 0..x_res {
-            let azimuth = x as f32 / x_res as f32 * 2.0 * PI;
-            for y in 0..=y_res {
-                let altitude = y as f32 / y_res as f32 * PI - PI / 2.0;
-                let position = Rotation3::from_euler_angles(0.0, altitude, azimuth) * Vector3::from([1.0, 0.0, 0.0]);
-                let normal = position.normalize();
-                let uv = [20.0 * x as f32 / x_res as f32, 20.0 * y as f32 / y_res as f32];
-                sphere_vertices.push((position.as_slice().try_into().unwrap(), normal.as_slice().try_into().unwrap(), uv));
+        let mut vs = Vec::new();
+        let mut chunk_sizes = Vec::new();
+        let terrain_size = 20;
+        for x in (-terrain_size..terrain_size).step_by(5) {
+            for y in (-terrain_size..terrain_size).step_by(5) {
+                for z in (-terrain_size..terrain_size).step_by(5) {
+                    let chunk = marching_cubes.march(vector![x, y, z], vector![x + 5, y + 5, z + 5], 0.0, Box::new(move |position| {
+                        let perlin = Perlin3D::new(0);
+                        // 0.05 * perlin.sample(position * 55.0) +
+                        // 0.20 * perlin.sample(position * 37.0) +
+                        // 0.75 * perlin.sample(position * 2.7)
+                        0.75 * (if position.norm() < 19.0 { 0.05 } else { -0.12 }) +
+                        0.20 * perlin.sample(position / 12.0) +
+                        0.05 * perlin.sample(position / 40.0)
+                    }));
+                    if chunk.len() > 0 {
+                        chunk_sizes.push(chunk.len() as u32);
+                        vs.extend(chunk);
+                    }
+                }
             }
         }
-
-        // Offset sphere's vertices using noise
-        let v_uv: Vec<([f32; 3], [f32; 2])> = sphere_vertices.iter().map(|(v, _vn, vt)| {
-            let position = Vector3::from(*v);
-            let height =
-                0.05 * perlin.sample(position * 55.0)
-                + 0.20 * perlin.sample(position * 37.0)
-                + 0.75 * perlin.sample(position * 2.7);
-            let offset_position = position * (1.0 + 0.3 * height);
-            (offset_position.as_slice().try_into().unwrap(), *vt)
-        }).collect::<Vec<_>>();
-
-        // Create index data
-        let mut indices: Vec<u16> = Vec::new();
-        // For each quadrilateral in the sphere, indexed by its bottom-left vertex
-        for x in 0..x_res {
-            for y in 0..y_res {
-                let column_length = y_res + 1;
-                let bottom_left = x * column_length + y;
-                let top_left = bottom_left + 1;
-                let bottom_right = if x == x_res - 1 { y } else { bottom_left + column_length };
-                let top_right = bottom_right + 1;
-                // Output two triangles to make up quad
-                indices.extend([bottom_left, top_left, top_right, top_right, bottom_right, bottom_left]);
-            }
-        }
+        let vs = Rc::new(vs);
+        let indices = Vec::from_iter(0..vs.len() as u32);
 
         // Recompute normal of each triangle and add it to each contained vertex
-        let mut normals = vec![Vector3::zeros(); v_uv.len()];
+        let mut normals = vec![Vector3::zeros(); vs.len()];
         for i in (0..indices.len()).step_by(3) {
             let (a, b, c) = (
-                Vector3::from(v_uv[indices[i] as usize].0),
-                Vector3::from(v_uv[indices[i + 1] as usize].0),
-                Vector3::from(v_uv[indices[i + 2] as usize].0));
+                Vector3::from(vs[indices[i] as usize]),
+                Vector3::from(vs[indices[i + 1] as usize]),
+                Vector3::from(vs[indices[i + 2] as usize]));
             let normal = (b - a).cross(&(c - a)).normalize();
             normals[indices[i] as usize] += normal;
             normals[indices[i + 1] as usize] += normal;
@@ -95,33 +78,39 @@ impl Asteroid {
 
         // Renormalize vertex normals and finalize vertex data
         let mut vertices = Vec::new();
-        for i in 0..v_uv.len() {
-            vertices.extend_from_slice(&v_uv[i].0);
+        for i in 0..vs.len() {
+            vertices.extend_from_slice(vs[i].as_slice());
             vertices.extend_from_slice(normals[i].normalize().as_slice());
-            vertices.extend_from_slice(&v_uv[i].1);
+            vertices.extend_from_slice(&[0.0, 0.0]);
         }
 
         let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
         let set_entity = physics.set_entity(entity);
         set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
         set_entity.rotation = UnitQuaternion::identity();
-        set_entity.scale = Vector3::from([1.0, 1.0, 1.0]);
-        set_entity.mass = 100_000.0;
+        set_entity.scale = Vector3::from([0.02, 0.02, 0.02]);
+        set_entity.mass = 1_000.0;
 
-        set_entity.vertices = Rc::new(v_uv.iter().map(|t| Vector3::from(t.0)).collect::<Vec<_>>());
-        let step_size = 20;
-        for x in (0..x_res).step_by(step_size) {
-            for y in (0..y_res).step_by(step_size) {
-                let mut subindices = Vec::new();
-                for i in x..(x + step_size as u16) {
-                    for j in y..(y + step_size as u16) {
-                        let start = (i as usize * y_res as usize + j as usize) * 6;
-                        subindices.extend_from_slice(&indices[start..start + 6]);
-                    }
-                }
-                let mesh = Mesh::new(set_entity.vertices.clone(), subindices);
-                set_entity.mesh.push(mesh);
-            }
+        set_entity.vertices = vs.clone();
+        // TODO split marching cubes mesh, or maybe generate it in chunks as well
+        // let step_size = 20;
+        // for x in (0..x_res).step_by(step_size) {
+        //     for y in (0..y_res).step_by(step_size) {
+        //         let mut subindices = Vec::new();
+        //         for i in x..(x + step_size as u16) {
+        //             for j in y..(y + step_size as u16) {
+        //                 let start = (i as usize * y_res as usize + j as usize) * 6;
+        //                 subindices.extend_from_slice(&indices[start..start + 6]);
+        //             }
+        //         }
+        //         let mesh = Mesh::new(set_entity.vertices.clone(), subindices);
+        //         set_entity.mesh.push(mesh);
+        //     }
+        // }
+        let mut start = 0;
+        for c in chunk_sizes {
+            set_entity.mesh.push(Mesh::new(vs.clone(), (start..start + c).collect::<Vec<_>>()));
+            start += c;
         }
 
         let terrain = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
@@ -133,7 +122,8 @@ impl Asteroid {
 
     pub fn render(&self, vulkan: &VulkanInstance, physics: &PhysicsEngine, cmdbuf: CommandBuffer, view_projection: Matrix4<f32>) {
         unsafe {
-            let model = Translation3::from(physics.get_entity(self.entity).position).to_homogeneous();
+            let model = Translation3::from(physics.get_entity(self.entity).position).to_homogeneous()
+                    * Scale3::from(physics.get_entity(self.entity).scale).to_homogeneous();
             let data = [model.as_slice(), view_projection.as_slice()].concat();
             let bytes = slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4);
             vulkan.device.cmd_push_constants(cmdbuf, vulkan.pipeline_layout, ShaderStageFlags::VERTEX, 0, bytes);
@@ -141,8 +131,9 @@ impl Asteroid {
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
-            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT16);
-            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
+            // vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT32);
+            // vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
+            vulkan.device.cmd_draw(cmdbuf, self.terrain.len, 1, 0, 0);
         }
     }
 }
