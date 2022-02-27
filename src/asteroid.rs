@@ -6,7 +6,7 @@ use std::slice;
 use std::cmp::Ordering::Equal;
 use std::convert::From;
 
-use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, IndexType, BufferUsageFlags};
+use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, BufferUsageFlags, IndexType};
 use nalgebra::{Matrix4, Vector3, Translation3, UnitQuaternion, vector, Scale3};
 use rand::{thread_rng, Rng};
 
@@ -40,18 +40,25 @@ impl Asteroid {
 
         let mut vs = Vec::new();
         let mut chunk_sizes = Vec::new();
-        let terrain_size = 20;
-        for x in (-terrain_size..terrain_size).step_by(5) {
-            for y in (-terrain_size..terrain_size).step_by(5) {
-                for z in (-terrain_size..terrain_size).step_by(5) {
+        let terrain_size = 100;
+        for x in (-terrain_size..=terrain_size).step_by(5) {
+            println!("x: {}", x);
+            for y in (-terrain_size..=terrain_size).step_by(5) {
+                for z in (-terrain_size..=terrain_size).step_by(5) {
                     let chunk = marching_cubes.march(vector![x, y, z], vector![x + 5, y + 5, z + 5], 0.0, Box::new(move |position| {
                         let perlin = Perlin3D::new(0);
-                        // 0.05 * perlin.sample(position * 55.0) +
-                        // 0.20 * perlin.sample(position * 37.0) +
-                        // 0.75 * perlin.sample(position * 2.7)
-                        0.75 * (if position.norm() < 19.0 { 0.05 } else { -0.12 }) +
-                        0.20 * perlin.sample(position / 12.0) +
-                        0.05 * perlin.sample(position / 40.0)
+                        let dist = position.norm();
+                        let factor = 1.9;
+                        (1.0 / 2.0) * perlin.sample(position / 7.0) +
+                        (1.0 / 4.0) * perlin.sample(position / 12.0) +
+                        (1.0 / 8.0) * ((terrain_size as f32 * 0.7 * factor).sqrt() - (dist * factor).sqrt() - (dist - terrain_size as f32 * 0.7).clamp(0.0, 0.1) * (0.1 * factor * dist).sin() + 1.0 / dist) + //if dist < (terrain_size as f32 * 0.95) { 1.0 - dist / (terrain_size as f32 * 0.95) } else { -0.1 * dist - 0.01 / dist }
+                        (1.0 / 16.0) * perlin.sample(position / 25.0) +
+                        (1.0 / 32.0) * perlin.sample(position / 48.0) +
+                        (1.0 / 64.0) * perlin.sample(position / 99.0) +
+                        (1.0 / 128.0) * perlin.sample(position / 201.0) +
+                        (1.0 / 256.0) * perlin.sample(position / 404.0) +
+                        (1.0 / 512.0) * perlin.sample(position / 810.0) +
+                        (1.0 / 1024.0) * perlin.sample(position / 1501.0)
                     }));
                     if chunk.len() > 0 {
                         chunk_sizes.push(chunk.len() as u32);
@@ -89,24 +96,9 @@ impl Asteroid {
         set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
         set_entity.rotation = UnitQuaternion::identity();
         set_entity.scale = Vector3::from([0.02, 0.02, 0.02]);
-        set_entity.mass = 1_000.0;
+        set_entity.mass = 100.0;
 
         set_entity.vertices = vs.clone();
-        // TODO split marching cubes mesh, or maybe generate it in chunks as well
-        // let step_size = 20;
-        // for x in (0..x_res).step_by(step_size) {
-        //     for y in (0..y_res).step_by(step_size) {
-        //         let mut subindices = Vec::new();
-        //         for i in x..(x + step_size as u16) {
-        //             for j in y..(y + step_size as u16) {
-        //                 let start = (i as usize * y_res as usize + j as usize) * 6;
-        //                 subindices.extend_from_slice(&indices[start..start + 6]);
-        //             }
-        //         }
-        //         let mesh = Mesh::new(set_entity.vertices.clone(), subindices);
-        //         set_entity.mesh.push(mesh);
-        //     }
-        // }
         let mut start = 0;
         for c in chunk_sizes {
             set_entity.mesh.push(Mesh::new(vs.clone(), (start..start + c).collect::<Vec<_>>()));
@@ -131,9 +123,9 @@ impl Asteroid {
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
-            // vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT32);
-            // vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
-            vulkan.device.cmd_draw(cmdbuf, self.terrain.len, 1, 0, 0);
+            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT32);
+            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
+            // vulkan.device.cmd_draw(cmdbuf, self.terrain.len / 2, 1, self.terrain.len / 2, 0);
         }
     }
 }

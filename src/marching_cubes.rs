@@ -34,6 +34,7 @@ impl Cube {
             p |= 1 << corner;
         }
         let mut es = [(0, 0); 12];
+        assert!(edges.len() % 3 == 0);
         es[..edges.len()].copy_from_slice(edges);
         Cube { pattern: p, edges: es, edges_len: edges.len() as u8 }
     }
@@ -224,11 +225,8 @@ impl MarchingCubes {
         let mut cubes = Vec::new();
         cubes.extend(&reflected);
         cubes.extend(inverted);
-        dbg!(cubes.len());
         cubes.sort_by_key(|c| c.pattern);
-        println!("{:?}", cubes.iter().filter(|c| c.pattern == 1).collect::<Vec<_>>());
         cubes.dedup_by_key(|c| c.pattern);
-        dbg!(cubes.len());
 
         MarchingCubes { cubes: (*cubes.as_slice()).try_into().unwrap() }
     }
@@ -240,6 +238,21 @@ impl MarchingCubes {
     // Generates a list of vertices from applying 
     pub fn march(&self, start: Vector3<i32>, end: Vector3<i32>, threshold: f32, noise: Box<dyn Fn(Vector3<f32>) -> f32>) -> Vec<Vector3<f32>> {
         let mut vertices = Vec::new();
+        
+        // Generate 3D noise texture
+        let mut noise_xyz = Vec::new();
+        for x in start[0]..=end[0] {
+            let mut noise_yz = Vec::new();
+            for y in start[1]..=end[1] {
+                let mut noise_z = Vec::new();
+                for z in start[2]..=end[2] {
+                    noise_z.push(noise(vector![x, y, z].cast::<f32>()));
+                }
+                noise_yz.push(noise_z);
+            }
+            noise_xyz.push(noise_yz);
+        }
+        
         for x in start[0]..end[0] {
             for y in start[1]..end[1] {
                 for z in start[2]..end[2] {
@@ -251,8 +264,7 @@ impl MarchingCubes {
                                 if i > 0 { code |= CUBE_X }
                                 if j > 0 { code |= CUBE_Y }
                                 if k > 0 { code |= CUBE_Z }
-                                let vertex = vector![x + i, y + j, z + k].cast::<f32>();
-                                if noise(vertex) > threshold {
+                                if noise_xyz[(x - start[0] + i) as usize][(y - start[1] + j) as usize][(z - start[2] + k) as usize] > threshold {
                                     pattern |= 1 << code;
                                 }
                             }
@@ -273,31 +285,28 @@ impl MarchingCubes {
                         let nz = z as f32 + (az + bz) as f32 / 2.0;
                         vector![nx, ny, nz]
                     });
-                    let cube_vertices = if pattern.count_ones() < 9 {
-                        cube_vertices.collect::<Vec<_>>()
-                    } else if pattern > 0 {
-                        let v1 = vector![x, y, z];
-                        let v2 = vector![x + 1, y, z];
-                        let v3 = vector![x + 1, y + 1, z];
-                        let v4 = vector![x, y + 1, z];
-                        let v5 = vector![x, y, z + 1];
-                        let v6 = vector![x + 1, y, z + 1];
-                        let v7 = vector![x + 1, y + 1, z + 1];
-                        let v8 = vector![x, y + 1, z + 1];
-                        vec![
-                            v1, v4, v3,
-                            v3, v2, v1,
-                            v2, v3, v7,
-                            v7, v6, v2,
-                            v5, v8, v4,
-                            v4, v1, v5,
-                            v7, v8, v5,
-                            v5, v6, v7,
-                            v4, v8, v7,
-                            v7, v3, v4,
-                            v1, v2, v6,
-                            v6, v5, v1].iter().map(|v| v.cast::<f32>()).collect::<Vec<_>>()
-                    } else { Vec::new() };
+                    // Generates vertices of a cube
+                    // let v1 = vector![x, y, z];
+                    // let v2 = vector![x + 1, y, z];
+                    // let v3 = vector![x + 1, y + 1, z];
+                    // let v4 = vector![x, y + 1, z];
+                    // let v5 = vector![x, y, z + 1];
+                    // let v6 = vector![x + 1, y, z + 1];
+                    // let v7 = vector![x + 1, y + 1, z + 1];
+                    // let v8 = vector![x, y + 1, z + 1];
+                    // vec![
+                    //     v1, v4, v3,
+                    //     v3, v2, v1,
+                    //     v2, v3, v7,
+                    //     v7, v6, v2,
+                    //     v5, v8, v4,
+                    //     v4, v1, v5,
+                    //     v7, v8, v5,
+                    //     v5, v6, v7,
+                    //     v4, v8, v7,
+                    //     v7, v3, v4,
+                    //     v1, v2, v6,
+                    //     v6, v5, v1].iter().map(|v| v.cast::<f32>()).collect::<Vec<_>>()
                     vertices.extend(cube_vertices);
                 }
             }
