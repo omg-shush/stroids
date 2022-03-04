@@ -68,6 +68,7 @@ impl VulkanAllocator {
                     && (da.size - VulkanAllocator::align_up(da.free_offset, alignment) >= size)
             }).ok_or("No suitable existing allocation found".into()).or_else::<Box<dyn Error>, _>(|_: Box<dyn Error>| {
                 let device_size = size.max(1 << 27);
+                dbg!(device_size);
                 let memory_type_index = self.get_memory_type_index(props, reqs.memory_type_bits)?;
                 let create_info = MemoryAllocateInfo::builder()
                     .allocation_size(device_size)

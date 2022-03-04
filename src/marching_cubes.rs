@@ -1,10 +1,14 @@
+use std::error::Error;
 use std::fmt::{Debug};
+use std::slice;
 
+use ash::Device;
+use ash::vk::{Pipeline, PipelineLayout, PipelineLayoutCreateInfo, DescriptorSetLayoutBinding, DescriptorType, ShaderStageFlags, DescriptorSetLayoutCreateInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo, DescriptorSet, BufferUsageFlags, WriteDescriptorSet, DescriptorBufferInfo, WHOLE_SIZE, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandPool, CommandBufferAllocateInfo, CommandBufferLevel, CommandPoolResetFlags, PipelineBindPoint, CommandBufferBeginInfo, CommandBufferUsageFlags, SubmitInfo, Fence, FenceCreateInfo, MemoryMapFlags, DescriptorPool, DescriptorSetLayout, Buffer};
 use nalgebra::{Vector3, vector};
 
-pub struct MarchingCubes {
-    cubes: [Cube; 256]
-}
+use crate::buffer::DynamicBuffer;
+use crate::vulkan::vulkan_instance::VulkanInstance;
+use crate::vulkan::vulkan_pipeline::VulkanPipeline;
 
 // Index corners of a cube as follows:
 // 0b000 = min x, y, and z coords
@@ -14,7 +18,7 @@ pub struct MarchingCubes {
 #[derive(Clone, Copy)]
 pub struct Cube {
     pattern: u8, // Bit vector of cube corners that are "inside" mesh
-    edges: [(u8, u8); 12], // Edges on which this cube outputs a vertex, defined by pairs of cube corners
+    edges: [(u8, u8); 15], // Edges on which this cube outputs a vertex, defined by pairs of cube corners
     edges_len: u8
 }
 
@@ -33,7 +37,7 @@ impl Cube {
         for corner in pattern {
             p |= 1 << corner;
         }
-        let mut es = [(0, 0); 12];
+        let mut es = [(0, 0); 15];
         assert!(edges.len() % 3 == 0);
         es[..edges.len()].copy_from_slice(edges);
         Cube { pattern: p, edges: es, edges_len: edges.len() as u8 }
@@ -46,7 +50,7 @@ impl Cube {
             .map(|tri| [tri[0], tri[2], tri[1]])
             .flatten()
             .collect::<Vec<_>>();
-        let mut es = [(0, 0); 12];
+        let mut es = [(0, 0); 15];
         es[..self.edges_len as usize].copy_from_slice(&edges[..self.edges_len as usize]);
 
         Cube { pattern, edges: es, edges_len: self.edges_len }
@@ -78,7 +82,7 @@ impl Cube {
             .map(|tri| if axis.count_ones() % 2 == 0 { tri.try_into().unwrap() } else { [tri[0], tri[2], tri[1]] })
             .flatten()
             .collect::<Vec<_>>();
-        let mut es = [(0, 0); 12];
+        let mut es = [(0, 0); 15];
         es[..self.edges_len as usize].copy_from_slice(&edges[..self.edges_len as usize]);
         Cube { pattern, edges: es, edges_len: self.edges_len }
     }
@@ -166,7 +170,7 @@ impl Cube {
             edges = edges.map(|(v1, v2)| (rot_x(v1), rot_x(v2)));
         }
 
-        let mut es = [(0, 0); 12];
+        let mut es = [(0, 0); 15];
         es[..edges.len()].copy_from_slice(&edges);
         Cube { pattern, edges: es, edges_len: self.edges_len }
     }
@@ -181,8 +185,29 @@ pub const CUBE_XZ:  u8 = 0b101;
 pub const CUBE_YZ:  u8 = 0b011;
 pub const CUBE_XYZ: u8 = 0b111;
 
+pub struct MarchingCubes {
+    device: Device,
+    triangulation: DynamicBuffer,
+    compute: Pipeline,
+    pipeline_layout: PipelineLayout,
+    descriptor_set_layout: DescriptorSetLayout,
+    output_descriptor: DescriptorSet,
+    fence: Fence
+}
+
+impl Drop for MarchingCubes {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device.destroy_pipeline(self.compute, None);
+            self.device.destroy_fence(self.fence, None);
+            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        }
+    }
+}
+
 impl MarchingCubes {
-    pub fn new() -> MarchingCubes {
+    pub fn new(vulkan: &VulkanInstance) -> Result<MarchingCubes, Box<dyn Error>> {
         let basis = [ // 0, 1, 2
             Cube::new(&[], &[]),
             Cube::new(&[CUBE], &[(CUBE, CUBE_X), (CUBE, CUBE_Y), (CUBE, CUBE_Z)]),
@@ -203,6 +228,8 @@ impl MarchingCubes {
             Cube::new(&[CUBE_X, CUBE_Y, CUBE_Z, CUBE_XZ], &[(CUBE, CUBE_Y), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_YZ), (CUBE, CUBE_X), (CUBE, CUBE_Z), (CUBE_X, CUBE_XY), (CUBE_X, CUBE_XY), (CUBE, CUBE_Z), (CUBE_Z, CUBE_YZ), (CUBE_Z, CUBE_YZ), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY)]),
             Cube::new(&[CUBE, CUBE_XZ, CUBE_XY, CUBE_YZ], &[(CUBE, CUBE_X), (CUBE, CUBE_Y), (CUBE, CUBE_Z), (CUBE_Z, CUBE_YZ), (CUBE_Y, CUBE_YZ), (CUBE_YZ, CUBE_XYZ), (CUBE_X, CUBE_XZ), (CUBE_Z, CUBE_XZ), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY), (CUBE_XY, CUBE_XYZ), (CUBE_Y, CUBE_XY)]),
             Cube::new(&[CUBE_X, CUBE_Z, CUBE_XZ, CUBE_YZ], &[(CUBE, CUBE_X), (CUBE, CUBE_Z), (CUBE_Y, CUBE_YZ), (CUBE, CUBE_X), (CUBE_Y, CUBE_YZ), (CUBE_XZ, CUBE_XYZ), (CUBE, CUBE_X), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY), (CUBE_XZ, CUBE_XYZ), (CUBE_Y, CUBE_YZ), (CUBE_YZ, CUBE_XYZ)]),
+            // 15, 16, 17
+            // Cube::new(&[CUBE, CUBE_X, CUBE_Y, CUBE_Z, CUBE_XYZ], &[(CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ), (CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Z, CUBE_XZ), (CUBE_X, CUBE_XZ), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_XZ), (CUBE_Z, CUBE_XZ), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_YZ)]),
         ];
 
         let rotated: [Cube; 60] = [
@@ -228,19 +255,102 @@ impl MarchingCubes {
         cubes.sort_by_key(|c| c.pattern);
         cubes.dedup_by_key(|c| c.pattern);
 
-        MarchingCubes { cubes: (*cubes.as_slice()).try_into().unwrap() }
+        // Write triangulation array to a buffer for use in compute shader
+        let triangulation_array = cubes.iter().flat_map(|cube| {
+            let mut corner_pairs = cube.edges.to_vec();
+            corner_pairs.truncate(cube.edges_len as usize);
+            let mut vertices = corner_pairs.into_iter().map(|(a, b)| {
+                let ax = if a & CUBE_X > 0 { 1 } else { 0 };
+                let ay = if a & CUBE_Y > 0 { 1 } else { 0 };
+                let az = if a & CUBE_Z > 0 { 1 } else { 0 };
+                let bx = if b & CUBE_X > 0 { 1 } else { 0 };
+                let by = if b & CUBE_Y > 0 { 1 } else { 0 };
+                let bz = if b & CUBE_Z > 0 { 1 } else { 0 };
+                let nx = (ax + bx) as f32 / 2.0;
+                let ny = (ay + by) as f32 / 2.0;
+                let nz = (az + bz) as f32 / 2.0;
+                vector![nx, ny, nz]
+            }).collect::<Vec<_>>();
+            vertices.extend([vector![f32::NAN, f32::NAN, f32::NAN]].iter().cycle().take(15 - vertices.len()));
+            vertices.into_iter().flat_map(|v| [v[0], v[1], v[2]])
+        }).collect::<Vec<_>>();
+        let triangulation = DynamicBuffer::new(&vulkan, &triangulation_array, BufferUsageFlags::STORAGE_BUFFER)?;
+
+        // Init compute pipeline
+        let (pipeline, pipeline_layout, descriptor_set_layout) = {
+            let descriptor_set_layout = {
+                let descriptor_bindings = [
+                    DescriptorSetLayoutBinding::builder()
+                        .binding(0)
+                        .descriptor_type(DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(ShaderStageFlags::COMPUTE)
+                        .build(),
+                    DescriptorSetLayoutBinding::builder()
+                        .binding(1)
+                        .descriptor_type(DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(ShaderStageFlags::COMPUTE)
+                        .build()
+                ];
+                let create_info = DescriptorSetLayoutCreateInfo::builder()
+                    .bindings(&descriptor_bindings);
+                unsafe { vulkan.device.create_descriptor_set_layout(&create_info, None)? }
+            };
+            let push_constant = ash::vk::PushConstantRange {
+                stage_flags: ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 4 * 6 // 6 uint/int's
+            };
+            let set_layouts = [descriptor_set_layout];
+            let push_constant_ranges = [push_constant];
+            let pipeline_layout = PipelineLayoutCreateInfo::builder()
+                .set_layouts(&set_layouts)
+                .push_constant_ranges(&push_constant_ranges);
+            let (pipeline, pipeline_layout) = VulkanPipeline::new_compute(&vulkan.device, *pipeline_layout)?;
+            (pipeline, pipeline_layout, descriptor_set_layout)
+        };
+
+        // Init buffer descriptors for compute
+        let descriptor_pool = {
+            let create_info = DescriptorPoolCreateInfo::builder()
+                .max_sets(1)
+                .pool_sizes(&[DescriptorPoolSize {
+                    ty: DescriptorType::STORAGE_BUFFER,
+                    descriptor_count: 1
+                }, DescriptorPoolSize {
+                    ty: DescriptorType::STORAGE_BUFFER,
+                    descriptor_count: 1
+                }]);
+            unsafe { vulkan.device.create_descriptor_pool(&create_info, None)? }
+        };
+        vulkan.descriptor_pools.borrow_mut().push(descriptor_pool); // Register for cleanup
+        let output_descriptor = {
+            let set_layouts = [descriptor_set_layout];
+            let create_info = DescriptorSetAllocateInfo::builder()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&set_layouts);
+            unsafe { vulkan.device.allocate_descriptor_sets(&create_info)?[0] }
+        };
+
+        // Init signalling fence
+        let fence = unsafe {
+            let create_info = FenceCreateInfo::builder();
+            vulkan.device.create_fence(&create_info, None)?
+        };
+
+        Ok (MarchingCubes {
+            device: vulkan.device.clone(),
+            compute: pipeline,
+            triangulation, pipeline_layout, descriptor_set_layout, output_descriptor, fence
+        })
     }
 
-    fn lookup(&self, pattern: u8) -> Cube {
-        self.cubes[pattern as usize]
-    }
-
-    // Generates a list of vertices from applying 
-    pub fn march(&self, start: Vector3<i32>, end: Vector3<i32>, threshold: f32, noise: Box<dyn Fn(Vector3<f32>) -> f32>) -> Vec<Vector3<f32>> {
-        let mut vertices = Vec::new();
-        
+    // Generates a list of vertices by applying the marching cubes algorithm to the given noise function over the given range
+    pub fn march(&self, vulkan: &VulkanInstance, start: Vector3<i32>, end: Vector3<i32>, threshold: f32, noise: Box<dyn Fn(Vector3<f32>) -> f32>) -> Result<Vec<Vector3<f32>>, Box<dyn Error>> {
         // Generate 3D noise texture
-        let mut noise_xyz = Vec::new();
+        // TODO should this be generated on CPU and passed in? or generated on GPU separately?
+        /*let mut noise_xyz = Vec::new();
         for x in start[0]..=end[0] {
             let mut noise_yz = Vec::new();
             for y in start[1]..=end[1] {
@@ -251,66 +361,78 @@ impl MarchingCubes {
                 noise_yz.push(noise_z);
             }
             noise_xyz.push(noise_yz);
-        }
+        }*/
+
+        // Allocate storage buffer // TODO deallocate afterwards!
+        // Maximum 5 triangles = 15 vec3's = 45 f32's = 180 bytes per cube
+        let num_cubes = (end - start).abs().product();
+        let (storage, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::STORAGE_BUFFER, (180 * num_cubes) as u64)?;
+        // Attach buffers to descriptors
+        unsafe {
+            vulkan.device.update_descriptor_sets(&[
+                WriteDescriptorSet::builder()
+                    .dst_set(self.output_descriptor)
+                    .dst_binding(0)
+                    .descriptor_type(DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(&[DescriptorBufferInfo {
+                        buffer: self.triangulation.buffer,
+                        offset: 0,
+                        range: WHOLE_SIZE
+                    }])
+                    .build(),
+                WriteDescriptorSet::builder()
+                    .dst_set(self.output_descriptor)
+                    .dst_binding(1)
+                    .descriptor_type(DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(&[DescriptorBufferInfo {
+                        buffer: storage,
+                        offset: 0,
+                        range: WHOLE_SIZE
+                    }])
+                    .build()
+            ], &[])
+        };
         
-        for x in start[0]..end[0] {
-            for y in start[1]..end[1] {
-                for z in start[2]..end[2] {
-                    let mut pattern = 0u8;
-                    for i in 0..=1 {
-                        for j in 0..=1 {
-                            for k in 0..=1 {
-                                let mut code = 0;
-                                if i > 0 { code |= CUBE_X }
-                                if j > 0 { code |= CUBE_Y }
-                                if k > 0 { code |= CUBE_Z }
-                                if noise_xyz[(x - start[0] + i) as usize][(y - start[1] + j) as usize][(z - start[2] + k) as usize] > threshold {
-                                    pattern |= 1 << code;
-                                }
-                            }
-                        }
-                    }
-                    let cube = self.lookup(pattern);
-                    let mut corner_pairs = cube.edges.to_vec();
-                    corner_pairs.truncate(cube.edges_len as usize);
-                    let cube_vertices = corner_pairs.into_iter().map(|(a, b)| {
-                        let ax = if a & CUBE_X > 0 { 1 } else { 0 };
-                        let ay = if a & CUBE_Y > 0 { 1 } else { 0 };
-                        let az = if a & CUBE_Z > 0 { 1 } else { 0 };
-                        let bx = if b & CUBE_X > 0 { 1 } else { 0 };
-                        let by = if b & CUBE_Y > 0 { 1 } else { 0 };
-                        let bz = if b & CUBE_Z > 0 { 1 } else { 0 };
-                        let nx = x as f32 + (ax + bx) as f32 / 2.0;
-                        let ny = y as f32 + (ay + by) as f32 / 2.0;
-                        let nz = z as f32 + (az + bz) as f32 / 2.0;
-                        vector![nx, ny, nz]
-                    });
-                    // Generates vertices of a cube
-                    // let v1 = vector![x, y, z];
-                    // let v2 = vector![x + 1, y, z];
-                    // let v3 = vector![x + 1, y + 1, z];
-                    // let v4 = vector![x, y + 1, z];
-                    // let v5 = vector![x, y, z + 1];
-                    // let v6 = vector![x + 1, y, z + 1];
-                    // let v7 = vector![x + 1, y + 1, z + 1];
-                    // let v8 = vector![x, y + 1, z + 1];
-                    // vec![
-                    //     v1, v4, v3,
-                    //     v3, v2, v1,
-                    //     v2, v3, v7,
-                    //     v7, v6, v2,
-                    //     v5, v8, v4,
-                    //     v4, v1, v5,
-                    //     v7, v8, v5,
-                    //     v5, v6, v7,
-                    //     v4, v8, v7,
-                    //     v7, v3, v4,
-                    //     v1, v2, v6,
-                    //     v6, v5, v1].iter().map(|v| v.cast::<f32>()).collect::<Vec<_>>()
-                    vertices.extend(cube_vertices);
-                }
-            }
+        // Dispatch compute
+        let cmdbuf = vulkan.graphics_command_buffers[0];
+        let local_size = vector![10, 10, 10];
+        let total_size = end - start;
+        let group_count = total_size.cast::<f32>().component_div(&local_size.cast::<f32>()).map(|f| f.ceil() as u32);
+        let pc_values = [total_size.as_slice(), start.as_slice()].concat();
+        let pc = unsafe { slice::from_raw_parts(pc_values.as_ptr() as *const u8, 6 * 4) };
+        unsafe {
+            let begin_info = CommandBufferBeginInfo::builder()
+                .flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            vulkan.device.begin_command_buffer(cmdbuf, &begin_info)?;
+            vulkan.device.cmd_bind_pipeline(cmdbuf, PipelineBindPoint::COMPUTE, self.compute);
+            vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::COMPUTE, self.pipeline_layout,
+                0, &[self.output_descriptor], &[]);
+            vulkan.device.cmd_push_constants(cmdbuf, self.pipeline_layout, ShaderStageFlags::COMPUTE, 0, &pc);
+            vulkan.device.cmd_dispatch(cmdbuf, group_count[0], group_count[1], group_count[2]);
+            vulkan.device.end_command_buffer(cmdbuf)?;
+            vulkan.device.queue_submit(vulkan.graphics_queue, &[SubmitInfo::builder()
+                .command_buffers(&[cmdbuf])
+                .build()
+            ], self.fence)?;
+            println!("Generating terrain...");
+            vulkan.device.wait_for_fences(&[self.fence], true, 60_000_000_000)?; // TODO 1 min timeout
         }
-        vertices
+
+        // Recover results from buffer
+        let vertices = unsafe {
+            let buf = vulkan.device.map_memory(allocation.memory, allocation.offset, allocation.size, MemoryMapFlags::empty())?;
+            // Maximum 5 triangles = 15 vec3's = 45 f32's = 180 bytes per cube
+            let floats = slice::from_raw_parts(buf as *mut f32, 45 * num_cubes as usize);
+            let vertices = floats.chunks_exact(3).map(|vert| vector![vert[0], vert[1], vert[2]]).filter(|v| !v[0].is_nan()).collect::<Vec<_>>();
+            vulkan.device.unmap_memory(allocation.memory);
+            vertices
+        };
+
+        // Cleanup compute
+        unsafe {
+            vulkan.device.reset_fences(&[self.fence])?;
+        }
+
+        Ok (vertices)
     }
 }

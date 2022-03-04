@@ -9,7 +9,7 @@ use crate::vulkan::vulkan_instance::VulkanInstance;
 pub struct DynamicBuffer {
     pub buffer: Buffer,
     allocation: Allocation,
-    pub len: u32
+    pub len: u32 // in elements, not bytes
 }
 
 impl DynamicBuffer {

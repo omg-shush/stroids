@@ -2,7 +2,7 @@ use std::error::Error;
 use std::ffi::CString;
 
 use ash::Device;
-use ash::vk::{Extent2D, RenderPass, PipelineVertexInputStateCreateInfo, PipelineLayoutCreateInfo, Pipeline, PipelineLayout, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, SampleCountFlags, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineDepthStencilStateCreateInfo, CompareOp};
+use ash::vk::{Extent2D, RenderPass, PipelineVertexInputStateCreateInfo, PipelineLayoutCreateInfo, Pipeline, PipelineLayout, ShaderModuleCreateInfo, PipelineShaderStageCreateInfo, ShaderStageFlags, PipelineInputAssemblyStateCreateInfo, PrimitiveTopology, Viewport, Rect2D, Offset2D, PipelineViewportStateCreateInfo, PipelineRasterizationStateCreateInfo, FrontFace, CullModeFlags, PolygonMode, PipelineMultisampleStateCreateInfo, SampleCountFlags, PipelineColorBlendAttachmentState, BlendFactor, BlendOp, ColorComponentFlags, PipelineColorBlendStateCreateInfo, GraphicsPipelineCreateInfo, PipelineCache, PipelineDepthStencilStateCreateInfo, CompareOp, ComputePipelineCreateInfo};
 use vk_shader_macros::include_glsl;
 
 pub struct VulkanPipeline {
@@ -16,7 +16,7 @@ pub struct VulkanPipeline {
  * 
  */
 impl VulkanPipeline {
-    pub fn new(device: &Device, extent: Extent2D, render_pass: &RenderPass, msaa_count: SampleCountFlags,
+    pub fn new_graphics(device: &Device, extent: Extent2D, render_pass: &RenderPass, msaa_count: SampleCountFlags,
         vertex_input_state: PipelineVertexInputStateCreateInfo,
         pipeline_layout_state: PipelineLayoutCreateInfo) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
         let vertex_module = {
@@ -107,5 +107,32 @@ impl VulkanPipeline {
         }
         
         Ok ((graphics_pipeline, pipeline_layout))
+    }
+
+    pub fn new_compute(device: &Device, pipeline_layout: PipelineLayoutCreateInfo) -> Result<(Pipeline, PipelineLayout), Box<dyn Error>> {
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None)? };
+        let compute_module = {
+            let create_info = ShaderModuleCreateInfo::builder()
+                .code(include_glsl!("./shaders/gen.comp"));
+            unsafe { device.create_shader_module(&create_info, None)? }
+        };
+        let shader_entry = CString::new("main")?;
+        let vertex_stage = PipelineShaderStageCreateInfo::builder()
+            .stage(ShaderStageFlags::COMPUTE)
+            .module(compute_module)
+            .name(&shader_entry);
+        let create_infos = [ ComputePipelineCreateInfo::builder()
+            .stage(*vertex_stage)
+            .layout(pipeline_layout)
+            .build()
+        ];
+        let compute_pipeline = unsafe { device.create_compute_pipelines(PipelineCache::null(), &create_infos, None).map_err(|e| e.1).map(|p| p[0])? };
+
+        // Clean up shader modules
+        unsafe {
+            device.destroy_shader_module(compute_module, None);
+        }
+
+        Ok ((compute_pipeline, pipeline_layout))
     }
 }

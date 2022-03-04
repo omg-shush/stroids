@@ -36,16 +36,33 @@ pub struct Asteroid {
 
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
-        let marching_cubes = MarchingCubes::new();
+        let marching_cubes = MarchingCubes::new(vulkan)?;
 
-        let mut vs = Vec::new();
-        let mut chunk_sizes = Vec::new();
-        let terrain_size = 100;
-        for x in (-terrain_size..=terrain_size).step_by(5) {
+        // let mut vs = Vec::new();
+        // let mut chunk_sizes = Vec::new();
+        let terrain_size = 200;
+        let start = vector![-terrain_size / 2, -terrain_size / 2, -terrain_size / 2];
+        let end = vector![terrain_size / 2, terrain_size / 2, terrain_size / 2];
+        let vs = marching_cubes.march(vulkan, start, end, 0.0, Box::new(move |position| {
+            let perlin = Perlin3D::new(0);
+            let dist = position.norm();
+            let factor = 1.9;
+            (1.0 / 2.0) * perlin.sample(position / 7.0) +
+            (1.0 / 4.0) * perlin.sample(position / 12.0) +
+            (1.0 / 8.0) * ((terrain_size as f32 * 0.7 * factor).sqrt() - (dist * factor).sqrt() - (dist - terrain_size as f32 * 0.7).clamp(0.0, 0.1) * (0.1 * factor * dist).sin() + 1.0 / dist) + //if dist < (terrain_size as f32 * 0.95) { 1.0 - dist / (terrain_size as f32 * 0.95) } else { -0.1 * dist - 0.01 / dist }
+            (1.0 / 16.0) * perlin.sample(position / 25.0) +
+            (1.0 / 32.0) * perlin.sample(position / 48.0) +
+            (1.0 / 64.0) * perlin.sample(position / 99.0) +
+            (1.0 / 128.0) * perlin.sample(position / 201.0) +
+            (1.0 / 256.0) * perlin.sample(position / 404.0) +
+            (1.0 / 512.0) * perlin.sample(position / 810.0) +
+            (1.0 / 1024.0) * perlin.sample(position / 1501.0)
+        }))?;
+        /*for x in (-terrain_size..=terrain_size).step_by(5) {
             println!("x: {}", x);
             for y in (-terrain_size..=terrain_size).step_by(5) {
                 for z in (-terrain_size..=terrain_size).step_by(5) {
-                    let chunk = marching_cubes.march(vector![x, y, z], vector![x + 5, y + 5, z + 5], 0.0, Box::new(move |position| {
+                    let chunk = marching_cubes.march(vulkan, vector![x, y, z], vector![x + 5, y + 5, z + 5], 0.0, Box::new(move |position| {
                         let perlin = Perlin3D::new(0);
                         let dist = position.norm();
                         let factor = 1.9;
@@ -59,14 +76,14 @@ impl Asteroid {
                         (1.0 / 256.0) * perlin.sample(position / 404.0) +
                         (1.0 / 512.0) * perlin.sample(position / 810.0) +
                         (1.0 / 1024.0) * perlin.sample(position / 1501.0)
-                    }));
+                    }))?;
                     if chunk.len() > 0 {
                         chunk_sizes.push(chunk.len() as u32);
                         vs.extend(chunk);
                     }
                 }
             }
-        }
+        }*/
         let vs = Rc::new(vs);
         let indices = Vec::from_iter(0..vs.len() as u32);
 
@@ -91,23 +108,24 @@ impl Asteroid {
             vertices.extend_from_slice(&[0.0, 0.0]);
         }
 
-        let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
+        let entity = physics.add_entity(EntityProperties { immovable: true, collision: false, gravitational: true }); // TODO reenable collision with better space partitioning
         let set_entity = physics.set_entity(entity);
         set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
         set_entity.rotation = UnitQuaternion::identity();
-        set_entity.scale = Vector3::from([0.02, 0.02, 0.02]);
+        set_entity.scale = Vector3::from([0.01, 0.01, 0.01]);
         set_entity.mass = 100.0;
 
         set_entity.vertices = vs.clone();
-        let mut start = 0;
-        for c in chunk_sizes {
-            set_entity.mesh.push(Mesh::new(vs.clone(), (start..start + c).collect::<Vec<_>>()));
-            start += c;
-        }
+        // let mut start = 0;
+        // for c in chunk_sizes {
+        //     set_entity.mesh.push(Mesh::new(vs.clone(), (start..start + c).collect::<Vec<_>>()));
+        //     start += c;
+        // }
 
         let terrain = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
-        let indices = DynamicBuffer::new(vulkan, &indices, BufferUsageFlags::INDEX_BUFFER)?;
+        let indices = DynamicBuffer::new(vulkan, &indices[0..1], BufferUsageFlags::INDEX_BUFFER)?;
         let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
+        println!("{} bytes", terrain.len * 4);
 
         Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture, entity })
     }
@@ -123,9 +141,9 @@ impl Asteroid {
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::GRAPHICS, vulkan.pipeline_layout,
                 1, &[self.texture.descriptor_set], &[]);
             vulkan.device.cmd_bind_vertex_buffers(cmdbuf, 0, &[self.terrain.buffer], &[0]);
-            vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT32);
-            vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
-            // vulkan.device.cmd_draw(cmdbuf, self.terrain.len / 2, 1, self.terrain.len / 2, 0);
+            // vulkan.device.cmd_bind_index_buffer(cmdbuf, self.indices.buffer, 0, IndexType::UINT32);
+            // vulkan.device.cmd_draw_indexed(cmdbuf, self.indices.len, 1, 0, 0, 0);
+            vulkan.device.cmd_draw(cmdbuf, self.terrain.len / 8, 1, 0, 0);
         }
     }
 }

@@ -1,0 +1,68 @@
+#version 450
+
+layout (local_size_x = 10, local_size_y = 10, local_size_z = 10) in;
+
+layout (push_constant) uniform Dimensions {
+    uint width;
+    uint height;
+    uint depth;
+    int startX;
+    int startY;
+    int startZ;
+} dims;
+
+// 5 tri = 15 vert = 45 floats max per cube
+struct CubeVertices {
+    float vertices[45];
+};
+
+layout (set = 0, binding = 0) readonly buffer TriangulationBuffer {
+    float cubes[45 * 256];
+} triArray;
+layout (set = 0, binding = 1) buffer OutputBuffer {
+    float result[];
+} outputBuffer;
+
+bool noise(vec3 pos) {
+    vec3 start = vec3(dims.startX, dims.startY, dims.startZ);
+    vec3 size = vec3(dims.width, dims.height, dims.depth);
+    vec3 center = start + size / 2.0;
+    float radius = min(dims.width, min(dims.height, dims.depth)) / 2.1;
+    return distance(center, pos) < radius;
+}
+
+void main() {
+    ivec3 start = ivec3(dims.startX, dims.startY, dims.startZ);
+    ivec3 cubePos = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Sample noise at every corner
+    uint pattern = 0;
+    for (int corner = 0; corner < 8; corner++) {
+        ivec3 samplePos = start + cubePos;
+        samplePos.x += (corner & 4) >> 2;
+        samplePos.y += (corner & 2) >> 1;
+        samplePos.z += (corner & 1) >> 0;
+        if (noise(vec3(samplePos))) {
+            pattern |= 1 << corner;
+        }
+    }
+    CubeVertices cube;
+    for (uint i = 0; i < 45; i++) {
+        cube.vertices[i] = triArray.cubes[pattern * 45 + i];
+    }
+
+    // Add cubePos to every vertex
+    for (uint vert = 0; vert < 15; vert++) {
+        cube.vertices[vert * 3 + 0] += float(dims.startX) + float(cubePos.x);
+        cube.vertices[vert * 3 + 1] += float(dims.startY) + float(cubePos.y);
+        cube.vertices[vert * 3 + 2] += float(dims.startZ) + float(cubePos.z);
+    }
+
+    // Write vertices to output
+    if (cubePos.x < dims.width && cubePos.y < dims.height && cubePos.z < dims.depth) {
+        uint outputPos = (cubePos.x * dims.height * dims.depth) + (cubePos.y * dims.depth) + cubePos.z; // serial # of this cube
+        for (uint i = 0; i < 45; i++) {
+            outputBuffer.result[outputPos * 45 + i] = cube.vertices[i];
+        }
+    }
+}

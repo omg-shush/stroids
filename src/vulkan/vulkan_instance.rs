@@ -300,7 +300,7 @@ impl VulkanInstance {
                 stage_flags: ShaderStageFlags::FRAGMENT
             }])
             .set_layouts(&descriptor_set_layouts);
-        let (graphics_pipeline, pipeline_layout) = VulkanPipeline::new(&device, surface_caps.current_extent, &render_pass, msaa_count,
+        let (graphics_pipeline, pipeline_layout) = VulkanPipeline::new_graphics(&device, surface_caps.current_extent, &render_pass, msaa_count,
             *vertex_input_state, *pipeline_layout_state)?;
 
         // Create command buffers
