@@ -23,26 +23,24 @@ layout (set = 0, binding = 1) buffer OutputBuffer {
     float result[];
 } outputBuffer;
 
-bool noise(vec3 pos) {
-    vec3 start = vec3(dims.startX, dims.startY, dims.startZ);
-    vec3 size = vec3(dims.width, dims.height, dims.depth);
-    vec3 center = start + size / 2.0;
-    float radius = min(dims.width, min(dims.height, dims.depth)) / 2.1;
-    return distance(center, pos) < radius;
+layout(set = 1, binding = 0, r32f) uniform readonly image3D noiseTex;
+
+bool noise(uvec3 pos) {
+    return imageLoad(noiseTex, ivec3(pos)).r > 0.0;
 }
 
 void main() {
     ivec3 start = ivec3(dims.startX, dims.startY, dims.startZ);
-    ivec3 cubePos = ivec3(gl_GlobalInvocationID.xyz);
+    uvec3 cubePos = uvec3(gl_GlobalInvocationID.xyz);
 
     // Sample noise at every corner
     uint pattern = 0;
     for (int corner = 0; corner < 8; corner++) {
-        ivec3 samplePos = start + cubePos;
+        uvec3 samplePos = cubePos;
         samplePos.x += (corner & 4) >> 2;
         samplePos.y += (corner & 2) >> 1;
         samplePos.z += (corner & 1) >> 0;
-        if (noise(vec3(samplePos))) {
+        if (noise(samplePos)) {
             pattern |= 1 << corner;
         }
     }

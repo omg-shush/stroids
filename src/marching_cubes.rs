@@ -3,10 +3,11 @@ use std::fmt::{Debug};
 use std::slice;
 
 use ash::Device;
-use ash::vk::{Pipeline, PipelineLayout, PipelineLayoutCreateInfo, DescriptorSetLayoutBinding, DescriptorType, ShaderStageFlags, DescriptorSetLayoutCreateInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo, DescriptorSet, BufferUsageFlags, WriteDescriptorSet, DescriptorBufferInfo, WHOLE_SIZE, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandPool, CommandBufferAllocateInfo, CommandBufferLevel, CommandPoolResetFlags, PipelineBindPoint, CommandBufferBeginInfo, CommandBufferUsageFlags, SubmitInfo, Fence, FenceCreateInfo, MemoryMapFlags, DescriptorPool, DescriptorSetLayout, Buffer};
+use ash::vk::{Pipeline, PipelineLayout, PipelineLayoutCreateInfo, DescriptorSetLayoutBinding, DescriptorType, ShaderStageFlags, DescriptorSetLayoutCreateInfo, DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo, DescriptorSet, BufferUsageFlags, WriteDescriptorSet, DescriptorBufferInfo, WHOLE_SIZE, CommandPoolCreateInfo, CommandPoolCreateFlags, CommandPool, CommandBufferAllocateInfo, CommandBufferLevel, CommandPoolResetFlags, PipelineBindPoint, CommandBufferBeginInfo, CommandBufferUsageFlags, SubmitInfo, Fence, FenceCreateInfo, MemoryMapFlags, DescriptorPool, DescriptorSetLayout, Buffer, DescriptorImageInfo};
 use nalgebra::{Vector3, vector};
 
 use crate::buffer::DynamicBuffer;
+use crate::texture::Texture;
 use crate::vulkan::vulkan_instance::VulkanInstance;
 use crate::vulkan::vulkan_pipeline::VulkanPipeline;
 
@@ -297,17 +298,34 @@ impl MarchingCubes {
                     .bindings(&descriptor_bindings);
                 unsafe { vulkan.device.create_descriptor_set_layout(&create_info, None)? }
             };
+            let noise_image_layout = {
+                let noise_image_bindings = [
+                    DescriptorSetLayoutBinding::builder()
+                        .binding(0)
+                        .descriptor_type(DescriptorType::STORAGE_IMAGE)
+                        .descriptor_count(1)
+                        .stage_flags(ShaderStageFlags::COMPUTE)
+                        .build()
+                ];
+                let create_info = DescriptorSetLayoutCreateInfo::builder()
+                    .bindings(&noise_image_bindings);
+                unsafe { vulkan.device.create_descriptor_set_layout(&create_info, None)? }
+            };
             let push_constant = ash::vk::PushConstantRange {
                 stage_flags: ShaderStageFlags::COMPUTE,
                 offset: 0,
                 size: 4 * 6 // 6 uint/int's
             };
-            let set_layouts = [descriptor_set_layout];
+            let set_layouts = [descriptor_set_layout, noise_image_layout];
             let push_constant_ranges = [push_constant];
             let pipeline_layout = PipelineLayoutCreateInfo::builder()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(&push_constant_ranges);
             let (pipeline, pipeline_layout) = VulkanPipeline::new_compute(&vulkan.device, *pipeline_layout)?;
+
+            // Cleanup useless layouts
+            unsafe { vulkan.device.destroy_descriptor_set_layout(noise_image_layout, None) };
+            
             (pipeline, pipeline_layout, descriptor_set_layout)
         };
 
@@ -317,10 +335,7 @@ impl MarchingCubes {
                 .max_sets(1)
                 .pool_sizes(&[DescriptorPoolSize {
                     ty: DescriptorType::STORAGE_BUFFER,
-                    descriptor_count: 1
-                }, DescriptorPoolSize {
-                    ty: DescriptorType::STORAGE_BUFFER,
-                    descriptor_count: 1
+                    descriptor_count: 2
                 }]);
             unsafe { vulkan.device.create_descriptor_pool(&create_info, None)? }
         };
@@ -347,7 +362,7 @@ impl MarchingCubes {
     }
 
     // Generates a list of vertices by applying the marching cubes algorithm to the given noise function over the given range
-    pub fn march(&self, vulkan: &VulkanInstance, start: Vector3<i32>, end: Vector3<i32>, threshold: f32, noise: Box<dyn Fn(Vector3<f32>) -> f32>) -> Result<Vec<Vector3<f32>>, Box<dyn Error>> {
+    pub fn march(&self, vulkan: &VulkanInstance, start: Vector3<i32>, end: Vector3<i32>, noise: &Texture) -> Result<Vec<Vector3<f32>>, Box<dyn Error>> {
         // Generate 3D noise texture
         // TODO should this be generated on CPU and passed in? or generated on GPU separately?
         /*let mut noise_xyz = Vec::new();
@@ -366,7 +381,8 @@ impl MarchingCubes {
         // Allocate storage buffer // TODO deallocate afterwards!
         // Maximum 5 triangles = 15 vec3's = 45 f32's = 180 bytes per cube
         let num_cubes = (end - start).abs().product();
-        let (storage, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::STORAGE_BUFFER, (180 * num_cubes) as u64)?;
+        let (storage, allocation) = vulkan.allocator.allocate_buffer(&vulkan.device, BufferUsageFlags::STORAGE_BUFFER, 180 * num_cubes as u64)?;
+        
         // Attach buffers to descriptors
         unsafe {
             vulkan.device.update_descriptor_sets(&[
@@ -406,7 +422,7 @@ impl MarchingCubes {
             vulkan.device.begin_command_buffer(cmdbuf, &begin_info)?;
             vulkan.device.cmd_bind_pipeline(cmdbuf, PipelineBindPoint::COMPUTE, self.compute);
             vulkan.device.cmd_bind_descriptor_sets(cmdbuf, PipelineBindPoint::COMPUTE, self.pipeline_layout,
-                0, &[self.output_descriptor], &[]);
+                0, &[self.output_descriptor, noise.descriptor_set], &[]);
             vulkan.device.cmd_push_constants(cmdbuf, self.pipeline_layout, ShaderStageFlags::COMPUTE, 0, &pc);
             vulkan.device.cmd_dispatch(cmdbuf, group_count[0], group_count[1], group_count[2]);
             vulkan.device.end_command_buffer(cmdbuf)?;

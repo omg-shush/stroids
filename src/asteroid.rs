@@ -1,5 +1,6 @@
 use std::collections::hash_map;
 use std::error::Error;
+use std::f32::consts::{E, PI};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::slice;
@@ -7,7 +8,7 @@ use std::cmp::Ordering::Equal;
 use std::convert::From;
 
 use ash::vk::{CommandBuffer, ShaderStageFlags, PipelineBindPoint, BufferUsageFlags, IndexType};
-use nalgebra::{Matrix4, Vector3, Translation3, UnitQuaternion, vector, Scale3};
+use nalgebra::{Matrix4, Vector3, Translation3, UnitQuaternion, vector, Scale3, ComplexField};
 use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
@@ -37,53 +38,30 @@ pub struct Asteroid {
 impl Asteroid {
     pub fn new(vulkan: &VulkanInstance, physics: &mut PhysicsEngine, asteroid_type: AsteroidType, size: [u32; 3]) -> Result<Asteroid, Box<dyn Error>> {
         let marching_cubes = MarchingCubes::new(vulkan)?;
+        let perlin = Perlin3D::new(0);
 
-        // let mut vs = Vec::new();
-        // let mut chunk_sizes = Vec::new();
         let terrain_size = 200;
         let start = vector![-terrain_size / 2, -terrain_size / 2, -terrain_size / 2];
         let end = vector![terrain_size / 2, terrain_size / 2, terrain_size / 2];
-        let vs = marching_cubes.march(vulkan, start, end, 0.0, Box::new(move |position| {
-            let perlin = Perlin3D::new(0);
-            let dist = position.norm();
-            let factor = 1.9;
-            (1.0 / 2.0) * perlin.sample(position / 7.0) +
-            (1.0 / 4.0) * perlin.sample(position / 12.0) +
-            (1.0 / 8.0) * ((terrain_size as f32 * 0.7 * factor).sqrt() - (dist * factor).sqrt() - (dist - terrain_size as f32 * 0.7).clamp(0.0, 0.1) * (0.1 * factor * dist).sin() + 1.0 / dist) + //if dist < (terrain_size as f32 * 0.95) { 1.0 - dist / (terrain_size as f32 * 0.95) } else { -0.1 * dist - 0.01 / dist }
-            (1.0 / 16.0) * perlin.sample(position / 25.0) +
-            (1.0 / 32.0) * perlin.sample(position / 48.0) +
-            (1.0 / 64.0) * perlin.sample(position / 99.0) +
-            (1.0 / 128.0) * perlin.sample(position / 201.0) +
-            (1.0 / 256.0) * perlin.sample(position / 404.0) +
-            (1.0 / 512.0) * perlin.sample(position / 810.0) +
-            (1.0 / 1024.0) * perlin.sample(position / 1501.0)
-        }))?;
-        /*for x in (-terrain_size..=terrain_size).step_by(5) {
-            println!("x: {}", x);
-            for y in (-terrain_size..=terrain_size).step_by(5) {
-                for z in (-terrain_size..=terrain_size).step_by(5) {
-                    let chunk = marching_cubes.march(vulkan, vector![x, y, z], vector![x + 5, y + 5, z + 5], 0.0, Box::new(move |position| {
-                        let perlin = Perlin3D::new(0);
-                        let dist = position.norm();
-                        let factor = 1.9;
-                        (1.0 / 2.0) * perlin.sample(position / 7.0) +
-                        (1.0 / 4.0) * perlin.sample(position / 12.0) +
-                        (1.0 / 8.0) * ((terrain_size as f32 * 0.7 * factor).sqrt() - (dist * factor).sqrt() - (dist - terrain_size as f32 * 0.7).clamp(0.0, 0.1) * (0.1 * factor * dist).sin() + 1.0 / dist) + //if dist < (terrain_size as f32 * 0.95) { 1.0 - dist / (terrain_size as f32 * 0.95) } else { -0.1 * dist - 0.01 / dist }
-                        (1.0 / 16.0) * perlin.sample(position / 25.0) +
-                        (1.0 / 32.0) * perlin.sample(position / 48.0) +
-                        (1.0 / 64.0) * perlin.sample(position / 99.0) +
-                        (1.0 / 128.0) * perlin.sample(position / 201.0) +
-                        (1.0 / 256.0) * perlin.sample(position / 404.0) +
-                        (1.0 / 512.0) * perlin.sample(position / 810.0) +
-                        (1.0 / 1024.0) * perlin.sample(position / 1501.0)
-                    }))?;
-                    if chunk.len() > 0 {
-                        chunk_sizes.push(chunk.len() as u32);
-                        vs.extend(chunk);
-                    }
-                }
-            }
-        }*/
+        let radius = terrain_size as f32 / 2.4;
+        println!("Generating noise...");
+        let noise = Texture::noise(&vulkan, vector![terrain_size as u32, terrain_size as u32, terrain_size as u32], Box::new(
+            move |position| {
+                let position = position + start.cast::<f32>();
+                let x = position.norm();
+                let gauss = |mean: f32, dev: f32, x: f32| {
+                    E.powf(-0.5 * (x - mean).powi(2) / dev.powi(2)) / (dev * (2.0 * PI).sqrt())
+                };
+                let factor = 12.0; //12.0 is good, but no caves!
+                (-2.5 * gauss(0.0, 1.0 / 3.0, x / radius)) +
+                (factor * (radius * factor.recip().tan() / x).atan() - 1.0) +
+                (1.0 / 2.0) * perlin.sample(position / 52.0) +
+                (1.0 / 4.0) * perlin.sample(position / 25.0) +
+                (1.0 / 8.0) * perlin.sample(position / 12.0) +
+                (1.0 / 16.0) * perlin.sample(position / 7.0) +
+                (1.0 / 32.0) * perlin.sample(position / 3.0)
+            }))?;
+        let vs = marching_cubes.march(vulkan, start, end, &noise)?;
         let vs = Rc::new(vs);
         let indices = Vec::from_iter(0..vs.len() as u32);
 
@@ -104,7 +82,7 @@ impl Asteroid {
         let mut vertices = Vec::new();
         for i in 0..vs.len() {
             vertices.extend_from_slice(vs[i].as_slice());
-            vertices.extend_from_slice(normals[i].normalize().as_slice());
+            vertices.extend_from_slice((normals[i].normalize() + vs[i].normalize()).normalize().as_slice());
             vertices.extend_from_slice(&[0.0, 0.0]);
         }
 
