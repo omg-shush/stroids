@@ -40,26 +40,29 @@ impl Asteroid {
         let marching_cubes = MarchingCubes::new(vulkan)?;
         let perlin = Perlin3D::new(0);
 
-        let terrain_size = 200;
+        let terrain_size = 100;
         let start = vector![-terrain_size / 2, -terrain_size / 2, -terrain_size / 2];
         let end = vector![terrain_size / 2, terrain_size / 2, terrain_size / 2];
-        let radius = terrain_size as f32 / 2.4;
+        let radius = terrain_size as f32 / 2.5;
         println!("Generating noise...");
         let noise = Texture::noise(&vulkan, vector![terrain_size as u32, terrain_size as u32, terrain_size as u32], Box::new(
             move |position| {
                 let position = position + start.cast::<f32>();
-                let x = position.norm();
+                let x = position.norm() / radius;
                 let gauss = |mean: f32, dev: f32, x: f32| {
                     E.powf(-0.5 * (x - mean).powi(2) / dev.powi(2)) / (dev * (2.0 * PI).sqrt())
                 };
-                let factor = 12.0; //12.0 is good, but no caves!
-                (-2.5 * gauss(0.0, 1.0 / 3.0, x / radius)) +
-                (factor * (radius * factor.recip().tan() / x).atan() - 1.0) +
-                (1.0 / 2.0) * perlin.sample(position / 52.0) +
-                (1.0 / 4.0) * perlin.sample(position / 25.0) +
-                (1.0 / 8.0) * perlin.sample(position / 12.0) +
-                (1.0 / 16.0) * perlin.sample(position / 7.0) +
-                (1.0 / 32.0) * perlin.sample(position / 3.0)
+                let factor = 12.0;
+                /* asteroid clump
+                (-2.5 * gauss(0.0, 1.0 / 2.0, x)) +
+                (factor * (radius * factor.recip().tan() / x).atan() - 1.0) + */
+                (-2.0 * gauss(0.0, 1.0 / 3.0, x)) +
+                (factor * (factor.recip().tan() / x).atan() - 1.0) +
+                (1.0 / 2.0) * perlin.sample(position / 52.0 * 83.3 / radius as f32) +
+                (1.0 / 4.0) * perlin.sample(position / 25.0 * 83.3 / radius as f32) +
+                (1.0 / 8.0) * perlin.sample(position / 12.0 * 83.3 / radius as f32) +
+                (1.0 / 16.0) * perlin.sample(position / 7.0 * 83.3 / radius as f32) +
+                (1.0 / 32.0) * perlin.sample(position / 3.0 * 83.3 / radius as f32)
             }))?;
         let vs = marching_cubes.march(vulkan, start, end, &noise)?;
         let vs = Rc::new(vs);
@@ -82,7 +85,7 @@ impl Asteroid {
         let mut vertices = Vec::new();
         for i in 0..vs.len() {
             vertices.extend_from_slice(vs[i].as_slice());
-            vertices.extend_from_slice((normals[i].normalize() + vs[i].normalize()).normalize().as_slice());
+            vertices.extend_from_slice(/*(normals[i].normalize() + vs[i].normalize()).normalize()*/normals[i].normalize().as_slice());
             vertices.extend_from_slice(&[0.0, 0.0]);
         }
 

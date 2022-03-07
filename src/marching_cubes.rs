@@ -218,7 +218,7 @@ impl MarchingCubes {
             Cube::new(&[CUBE, CUBE_XYZ], &[(CUBE, CUBE_X), (CUBE, CUBE_Y), (CUBE, CUBE_Z), (CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ)]),
             Cube::new(&[CUBE_X, CUBE_XZ, CUBE_Z], &[(CUBE, CUBE_X), (CUBE, CUBE_Z), (CUBE_X, CUBE_XY), (CUBE_X, CUBE_XY), (CUBE, CUBE_Z), (CUBE_Z, CUBE_YZ), (CUBE_Z, CUBE_YZ), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY)]),
             // 6, 7, 8
-            Cube::new(&[CUBE, CUBE_X, CUBE_XYZ], &[(CUBE_X, CUBE_XZ), (CUBE, CUBE_Z), (CUBE_X, CUBE_XY), (CUBE_X, CUBE_XY), (CUBE, CUBE_Z), (CUBE, CUBE_Y), (CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ)]),
+            Cube::new(&[CUBE, CUBE_X, CUBE_XYZ], &[(CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE, CUBE_Z), (CUBE_X, CUBE_XY), (CUBE, CUBE_Y), (CUBE, CUBE_Z), (CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ)]),
             Cube::new(&[CUBE_X, CUBE_Y, CUBE_XYZ], &[(CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE, CUBE_X), (CUBE, CUBE_Y), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_YZ), (CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ)]),
             Cube::new(&[CUBE, CUBE_X, CUBE_Z, CUBE_XZ], &[(CUBE_X, CUBE_XY), (CUBE, CUBE_Y), (CUBE_XZ, CUBE_XYZ), (CUBE_XZ, CUBE_XYZ), (CUBE, CUBE_Y), (CUBE_Z, CUBE_YZ)]),
             // 9, 10, 11
@@ -230,10 +230,12 @@ impl MarchingCubes {
             Cube::new(&[CUBE, CUBE_XZ, CUBE_XY, CUBE_YZ], &[(CUBE, CUBE_X), (CUBE, CUBE_Y), (CUBE, CUBE_Z), (CUBE_Z, CUBE_YZ), (CUBE_Y, CUBE_YZ), (CUBE_YZ, CUBE_XYZ), (CUBE_X, CUBE_XZ), (CUBE_Z, CUBE_XZ), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY), (CUBE_XY, CUBE_XYZ), (CUBE_Y, CUBE_XY)]),
             Cube::new(&[CUBE_X, CUBE_Z, CUBE_XZ, CUBE_YZ], &[(CUBE, CUBE_X), (CUBE, CUBE_Z), (CUBE_Y, CUBE_YZ), (CUBE, CUBE_X), (CUBE_Y, CUBE_YZ), (CUBE_XZ, CUBE_XYZ), (CUBE, CUBE_X), (CUBE_XZ, CUBE_XYZ), (CUBE_X, CUBE_XY), (CUBE_XZ, CUBE_XYZ), (CUBE_Y, CUBE_YZ), (CUBE_YZ, CUBE_XYZ)]),
             // 15, 16, 17
-            // Cube::new(&[CUBE, CUBE_X, CUBE_Y, CUBE_Z, CUBE_XYZ], &[(CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ), (CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Z, CUBE_XZ), (CUBE_X, CUBE_XZ), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_XZ), (CUBE_Z, CUBE_XZ), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_YZ)]),
+            Cube::new(&[CUBE, CUBE_X, CUBE_Y, CUBE_Z, CUBE_XYZ], &[(CUBE_XZ, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ), (CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_Z, CUBE_XZ), (CUBE_X, CUBE_XZ), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_XZ), (CUBE_Z, CUBE_XZ), (CUBE_Y, CUBE_YZ), (CUBE_Z, CUBE_YZ)]),
+            Cube::new(&[CUBE, CUBE_X, CUBE_Y, CUBE_YZ, CUBE_XYZ], &[(CUBE_XY, CUBE_XYZ), (CUBE_XZ, CUBE_XYZ), (CUBE_Y, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE_XZ, CUBE_XYZ), (CUBE_Z, CUBE_YZ), (CUBE_Y, CUBE_XY), (CUBE_X, CUBE_XZ), (CUBE_X, CUBE_XY), (CUBE_Y, CUBE_XY), (CUBE, CUBE_Z), (CUBE_X, CUBE_XZ), (CUBE_Y, CUBE_XY), (CUBE_Z, CUBE_YZ), (CUBE, CUBE_Z)]),
+            Cube::new(&[CUBE, CUBE_X, CUBE_Y, CUBE_XZ, CUBE_YZ, CUBE_XY], &[(CUBE, CUBE_Z), (CUBE_Z, CUBE_XZ), (CUBE_XZ, CUBE_XYZ), (CUBE, CUBE_Z), (CUBE_XZ, CUBE_XYZ), (CUBE_XY, CUBE_XYZ), (CUBE, CUBE_Z), (CUBE_XY, CUBE_XYZ), (CUBE_YZ, CUBE_XYZ), (CUBE, CUBE_Z), (CUBE_YZ, CUBE_XYZ), (CUBE_Z, CUBE_YZ)])
         ];
 
-        let rotated: [Cube; 60] = [
+        let rotated: [Cube; 72] = [
                 basis,
                 basis.map(|c| c.rotate(CUBE_X)),
                 basis.map(|c| c.rotate(CUBE_Y)),
@@ -363,21 +365,6 @@ impl MarchingCubes {
 
     // Generates a list of vertices by applying the marching cubes algorithm to the given noise function over the given range
     pub fn march(&self, vulkan: &VulkanInstance, start: Vector3<i32>, end: Vector3<i32>, noise: &Texture) -> Result<Vec<Vector3<f32>>, Box<dyn Error>> {
-        // Generate 3D noise texture
-        // TODO should this be generated on CPU and passed in? or generated on GPU separately?
-        /*let mut noise_xyz = Vec::new();
-        for x in start[0]..=end[0] {
-            let mut noise_yz = Vec::new();
-            for y in start[1]..=end[1] {
-                let mut noise_z = Vec::new();
-                for z in start[2]..=end[2] {
-                    noise_z.push(noise(vector![x, y, z].cast::<f32>()));
-                }
-                noise_yz.push(noise_z);
-            }
-            noise_xyz.push(noise_yz);
-        }*/
-
         // Allocate storage buffer // TODO deallocate afterwards!
         // Maximum 5 triangles = 15 vec3's = 45 f32's = 180 bytes per cube
         let num_cubes = (end - start).abs().product();
