@@ -18,6 +18,7 @@ mod player;
 mod buffer;
 mod physics;
 mod marching_cubes;
+mod octree;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");

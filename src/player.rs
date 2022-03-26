@@ -53,7 +53,7 @@ impl Player {
             Vector3::from([1.0, 0.0, -1.0])]);
         let physics_indices = vec![0, 1, 2, 2, 3, 0];
         physics.set_entity(entity).vertices = physics_vertices.clone();
-        physics.set_entity(entity).mesh.push(Mesh::new(physics_vertices, physics_indices));
+        physics.set_entity(entity).mesh.push(Mesh::new(physics_vertices, &physics_indices));
 
         Ok (Player {
             camera,

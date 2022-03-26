@@ -1,7 +1,10 @@
+use std::collections::HashSet;
 use std::mem::swap;
 use std::rc::Rc;
 
 use nalgebra::{Vector3, SVD, Matrix3x2, Matrix3, UnitQuaternion, Point3, Translation3, Scale3, Matrix4};
+
+use crate::octree::Octree;
 
 pub type Entity = usize;
 
@@ -198,27 +201,27 @@ pub struct Mesh {
     pub bounding_min: Vector3<f32>, // Contains all vertices in this portion of mesh
     pub bounding_max: Vector3<f32>,
     vertices: Rc<Vec<Vector3<f32>>>,
-    indices: Vec<u32> // Vertices given in clockwise order
+    index_count: usize,
+    // Vertex indices of triangles, clockwise order
+    octree: Octree<u32>
 }
 
 impl Mesh {
     // Assumes indices is nonempty
-    pub fn new(vertices: Rc<Vec<Vector3<f32>>>, indices: Vec<u32>) -> Mesh {
+    pub fn new(vertices: Rc<Vec<Vector3<f32>>>, indices: &Vec<u32>) -> Mesh {
         let (mut bounding_min, mut bounding_max) = (vertices[indices[0] as usize], vertices[indices[0] as usize]);
         for index in indices.iter() {
             let vertex = vertices[*index as usize];
             bounding_min = vertex.inf(&bounding_min);
             bounding_max = vertex.sup(&bounding_max);
         }
-        Mesh { bounding_min, bounding_max, vertices, indices }
+        let octree = Octree::new(vertices.clone(), &indices);
+        Mesh { bounding_min, bounding_max, vertices, index_count: indices.len(), octree }
     }
 
     // Returns an iterator over all the triangles in this mesh, represented by triples of vertices
-    pub fn triangles(&self) -> impl Iterator<Item = [&Vector3<f32>; 3]> {
-        self.indices.chunks(3).map(|indices| {
-            let [i, j, k]: [u32; 3] = indices.try_into().unwrap();
-            [&self.vertices[i as usize], &self.vertices[j as usize], &self.vertices[k as usize]]
-        })
+    fn triangles(&self) -> impl Iterator<Item = [Vector3<f32>; 3]> + '_ {
+        MeshIter::from_mesh(&self)
     }
 
     // Intersects two meshes together, returning a list of the normals of the triangles of other which were intersected
@@ -226,26 +229,61 @@ impl Mesh {
         // For every pair of a triangle in self and a triangle in other
         // TODO this is quadratic time! can it be improved?
         let mut intersections = Vec::new();
-        for [a, b, c] in self.triangles() {
-            for [d, e, f] in other.triangles() {
-                fn apply(mat: Matrix4<f32>, point: &Vector3<f32>) -> Vector3<f32> {
-                    let p = Point3::from_slice(point.as_slice());
-                    let new = mat.transform_point(&p);
-                    new.coords
+        let (smaller, larger, smaller_to_world, larger_to_world) = if self.index_count < other.index_count {
+            (self, other, self_to_world, other_to_world)
+        } else {
+            (other, self, other_to_world, self_to_world)
+        };
+        for [a, b, c] in smaller.triangles() {
+            fn apply(mat: Matrix4<f32>, point: Vector3<f32>) -> Vector3<f32> {
+                let p = Point3::from_slice(point.as_slice());
+                let new = mat.transform_point(&p);
+                new.coords
+            }
+            let (a, b, c) = ( // World space
+                apply(smaller_to_world, a),
+                apply(smaller_to_world, b),
+                apply(smaller_to_world, c));
+
+            // Traverse larger's octree to reduce # triangles examined
+
+            // Intersect all octree nodes that contain abc
+            let mut intersected_triangles = HashSet::new(); // Track triangles already intersected to avoid duplicates
+            let mut intersect_stack = vec![&larger.octree];
+            while let Some (octree) = intersect_stack.pop() {
+                // Intersect triangles within this node
+                for tri in octree.triangles.chunks_exact(3) {
+                    let [di, ei, fi]: [u32; 3] = tri.try_into().unwrap();
+                    if !intersected_triangles.contains(&(di, ei, fi)) {
+                        let (d, e, f) = (
+                            apply(larger_to_world, larger.vertices[di as usize]),
+                            apply(larger_to_world, larger.vertices[ei as usize]),
+                            apply(larger_to_world, larger.vertices[fi as usize]));
+                        let inter = Mesh::intersect_triangles(a, b, c, d, e, f); // In world space
+                        if let Some (_line_segment) = inter { // If intersection exists
+                            intersected_triangles.insert((di, ei, fi));
+                            let tri_normal = (e - d).cross(&(f - d)).normalize();
+                            if !tri_normal[0].is_nan() && !tri_normal[1].is_nan() && !tri_normal[2].is_nan() {
+                                intersections.push(tri_normal); // triangle normal is in world space
+                            }
+                        }
+                    }
                 }
-                let (a, b, c) = (
-                    apply(self_to_world, a),
-                    apply(self_to_world, b),
-                    apply(self_to_world, c));
-                let (d, e, f) = (
-                    apply(other_to_world, d),
-                    apply(other_to_world, e),
-                    apply(other_to_world, f));
-                let inter = Mesh::intersect_triangles(a, b, c, d, e, f);
-                if let Some (_line_segment) = inter {
-                    let tri_normal = (e - d).cross(&(f - d)).normalize();
-                    if !tri_normal[0].is_nan() && !tri_normal[1].is_nan() && !tri_normal[2].is_nan() {
-                        intersections.push(tri_normal); // triangle normal is in world space
+
+                // Intersect triangles in child nodes
+                let world_center = apply(larger_to_world, octree.center);
+                let (qa, qb, qc) = (Octree::<u32>::octant(world_center, a), Octree::<u32>::octant(world_center, b), Octree::<u32>::octant(world_center, c));
+                if qa == qb && qb == qc {
+                    // abc is fully within a certain child octant; intersect just it
+                    if let Some (child) = octree.children[qa as usize].as_ref().map(|b| b.as_ref()) {
+                        intersect_stack.push(child);
+                    }
+                } else {
+                    // abc is between octants; must intersect all nonempty children
+                    for child in octree.children.iter() {
+                        if let Some (c) = child.as_ref() {
+                            intersect_stack.push(c.as_ref());
+                        }
                     }
                 }
             }
@@ -334,29 +372,29 @@ impl Mesh {
     }
 
     // Returns list of triangle intersections within this mesh along the ray
-    pub fn intersect_ray(&self, source: Vector3<f32>, dest: Vector3<f32>) -> Vec<(Vector3<f32>, Vector3<f32>, f32)> {
-        let mut intersections = Vec::new();
-        for i in (0..self.indices.len()).step_by(3) {
-            let (a, b, c) = ( // For each triangle in mesh
-                self.vertices[self.indices[i] as usize],
-                self.vertices[self.indices[i + 1] as usize],
-                self.vertices[self.indices[i + 2] as usize]);
-            let normal = (b - a).cross(&(c - a)).normalize();
+    // pub fn intersect_ray(&self, source: Vector3<f32>, dest: Vector3<f32>) -> Vec<(Vector3<f32>, Vector3<f32>, f32)> {
+    //     let mut intersections = Vec::new();
+    //     for i in (0..self.indices.len()).step_by(3) {
+    //         let (a, b, c) = ( // For each triangle in mesh
+    //             self.vertices[self.indices[i] as usize],
+    //             self.vertices[self.indices[i + 1] as usize],
+    //             self.vertices[self.indices[i + 2] as usize]);
+    //         let normal = (b - a).cross(&(c - a)).normalize();
 
-            // Intersect line of ray with plane of triangle
-            // Ray: source + alpha * (dest - source) = point
-            // Plane: (point - a) . normal = 0
-            // alpha = ((a - source) . normal) / ((dest - source) . normal)
-            let alpha = ((a - source).dot(&normal)) / ((dest - source).dot(&normal));
-            if alpha >= 0.0 && alpha <= 1.0 { // alpha = 0 means source on plane; alpha = 1 means dest on plane; alpha c [0, 1] means ray intersects plane
-                let point = source + alpha * (dest - source);
-                if Mesh::projected_within_triangle(point, a, b, c) {
-                    intersections.push((point, normal, (dest - point).norm()));
-                }
-            }
-        }
-        intersections
-    }
+    //         // Intersect line of ray with plane of triangle
+    //         // Ray: source + alpha * (dest - source) = point
+    //         // Plane: (point - a) . normal = 0
+    //         // alpha = ((a - source) . normal) / ((dest - source) . normal)
+    //         let alpha = ((a - source).dot(&normal)) / ((dest - source).dot(&normal));
+    //         if alpha >= 0.0 && alpha <= 1.0 { // alpha = 0 means source on plane; alpha = 1 means dest on plane; alpha c [0, 1] means ray intersects plane
+    //             let point = source + alpha * (dest - source);
+    //             if Mesh::projected_within_triangle(point, a, b, c) {
+    //                 intersections.push((point, normal, (dest - point).norm()));
+    //             }
+    //         }
+    //     }
+    //     intersections
+    // }
 
     pub fn projected_within_triangle(projected: Vector3<f32>, a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>) -> bool {
         // Check if projected point is within triangle using barycentric coordinates
@@ -368,5 +406,51 @@ impl Mesh {
         let beta = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / denom;
         let gamma = 1.0 - alpha - beta;
         alpha >= 0.0 && beta >= 0.0 && gamma >= 0.0
+    }
+}
+
+// Performs a preorder traversal of the mesh's octree, translating indices into vertices
+struct MeshIter<'a> {
+    vertices: Rc<Vec<Vector3<f32>>>,
+    position: Vec<(&'a Octree<u32>, usize, usize)> // Current octree node, next index within that node, next child under that node
+}
+
+impl<'a> MeshIter<'a> {
+    pub fn from_mesh(mesh: &Mesh) -> MeshIter {
+        MeshIter { vertices: mesh.vertices.clone(), position: vec![(&mesh.octree, 0, 0)] }
+    }
+}
+
+impl<'a> Iterator for MeshIter<'a> {
+    type Item = [Vector3<f32>; 3];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some ((node, next_index, next_child)) = self.position.last_mut() {
+            if *next_index < node.triangles.len() {
+                // Return triangle from current node
+                let (a, b, c) = (node.triangles[*next_index], node.triangles[*next_index + 1], node.triangles[*next_index + 2]);
+                let tri = [self.vertices[a as usize], self.vertices[b as usize], self.vertices[c as usize]];
+                *next_index += 3;
+                Some (tri)
+            } else {
+                let mut next_nonempty_child = *next_child;
+                while next_nonempty_child < node.children.len() && node.children[next_nonempty_child].is_none() {
+                    next_nonempty_child += 1;
+                }
+                if next_nonempty_child < node.children.len() {
+                    // Return contents of next child node
+                    *next_child = next_nonempty_child + 1;
+                    let next_position = (node.children[next_nonempty_child].as_ref().unwrap().as_ref(), 0, 0);
+                    self.position.push(next_position);
+                    self.next()
+                } else {
+                    // Nothing more to output from this node; return to parent
+                    self.position.pop();
+                    self.next()
+                }
+            }
+        } else {
+            None
+        }
     }
 }

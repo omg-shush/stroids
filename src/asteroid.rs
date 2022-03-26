@@ -13,6 +13,7 @@ use rand::{thread_rng, Rng};
 
 use crate::buffer::DynamicBuffer;
 use crate::marching_cubes::MarchingCubes;
+use crate::octree::Octree;
 use crate::physics::{PhysicsEngine, Entity, EntityProperties, Mesh};
 use crate::region::Region;
 use crate::texture::Texture;
@@ -85,11 +86,11 @@ impl Asteroid {
         let mut vertices = Vec::new();
         for i in 0..vs.len() {
             vertices.extend_from_slice(vs[i].as_slice());
-            vertices.extend_from_slice(/*(normals[i].normalize() + vs[i].normalize()).normalize()*/normals[i].normalize().as_slice());
+            vertices.extend_from_slice(normals[i].normalize().as_slice());
             vertices.extend_from_slice(&[0.0, 0.0]);
         }
 
-        let entity = physics.add_entity(EntityProperties { immovable: true, collision: false, gravitational: true }); // TODO reenable collision with better space partitioning
+        let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true }); // TODO reenable collision with better space partitioning
         let set_entity = physics.set_entity(entity);
         set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
         set_entity.rotation = UnitQuaternion::identity();
@@ -97,11 +98,7 @@ impl Asteroid {
         set_entity.mass = 100.0;
 
         set_entity.vertices = vs.clone();
-        // let mut start = 0;
-        // for c in chunk_sizes {
-        //     set_entity.mesh.push(Mesh::new(vs.clone(), (start..start + c).collect::<Vec<_>>()));
-        //     start += c;
-        // }
+        set_entity.mesh.push(Mesh::new(vs.clone(), &indices));
 
         let terrain = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
         let indices = DynamicBuffer::new(vulkan, &indices[0..1], BufferUsageFlags::INDEX_BUFFER)?;
