@@ -5,6 +5,7 @@ use std::rc::Rc;
 use nalgebra::{Vector3, SVD, Matrix3x2, Matrix3, UnitQuaternion, Point3, Translation3, Scale3, Matrix4};
 
 use crate::octree::Octree;
+use crate::rtree::{RTree, BoundingBox};
 
 pub type Entity = usize;
 
@@ -202,8 +203,7 @@ pub struct Mesh {
     pub bounding_max: Vector3<f32>,
     vertices: Rc<Vec<Vector3<f32>>>,
     index_count: usize,
-    // Vertex indices of triangles, clockwise order
-    octree: Octree<u32>
+    rtree: RTree<u32> // Leaf nodes contain vertex indices of triangles, clockwise order
 }
 
 impl Mesh {
@@ -215,8 +215,9 @@ impl Mesh {
             bounding_min = vertex.inf(&bounding_min);
             bounding_max = vertex.sup(&bounding_max);
         }
-        let octree = Octree::new(vertices.clone(), &indices);
-        Mesh { bounding_min, bounding_max, vertices, index_count: indices.len(), octree }
+        // let octree = Octree::new(vertices.clone(), &indices);
+        let rtree = RTree::new(vertices.clone(), &indices);
+        Mesh { bounding_min, bounding_max, vertices, index_count: indices.len(), rtree }
     }
 
     // Returns an iterator over all the triangles in this mesh, represented by triples of vertices
@@ -244,48 +245,57 @@ impl Mesh {
                 apply(smaller_to_world, a),
                 apply(smaller_to_world, b),
                 apply(smaller_to_world, c));
+            let abc_bounding = BoundingBox::from(&[a, b, c]);
 
-            // Traverse larger's octree to reduce # triangles examined
+            // Traverse larger's rtree to reduce # triangles examined
 
-            // Intersect all octree nodes that contain abc
-            let mut intersected_triangles = HashSet::new(); // Track triangles already intersected to avoid duplicates
-            let mut intersect_stack = vec![&larger.octree];
-            while let Some (octree) = intersect_stack.pop() {
-                // Intersect triangles within this node
-                for tri in octree.triangles.chunks_exact(3) {
-                    let [di, ei, fi]: [u32; 3] = tri.try_into().unwrap();
-                    if !intersected_triangles.contains(&(di, ei, fi)) {
-                        let (d, e, f) = (
-                            apply(larger_to_world, larger.vertices[di as usize]),
-                            apply(larger_to_world, larger.vertices[ei as usize]),
-                            apply(larger_to_world, larger.vertices[fi as usize]));
-                        let inter = Mesh::intersect_triangles(a, b, c, d, e, f); // In world space
-                        if let Some (_line_segment) = inter { // If intersection exists
-                            intersected_triangles.insert((di, ei, fi));
-                            let tri_normal = (e - d).cross(&(f - d)).normalize();
-                            if !tri_normal[0].is_nan() && !tri_normal[1].is_nan() && !tri_normal[2].is_nan() {
-                                intersections.push(tri_normal); // triangle normal is in world space
+            // Intersect all rtree nodes that contain abc
+            let mut intersect_stack = vec![&larger.rtree];
+            while let Some (rtree) = intersect_stack.pop() {
+                match rtree {
+                    RTree::Branch(children) => { // Add children that may intersect with this triangle
+                        for (bounding, rtree) in children {
+                            // Transform bounding box into world space
+                            let (world_min, world_max) = (apply(larger_to_world, bounding.min), apply(larger_to_world, bounding.max));
+                            let rtree_bounding = BoundingBox::from(&[world_min, world_max]);
+                            if abc_bounding.intersects(&rtree_bounding) {
+                                intersect_stack.push(rtree);
+                            }
+                        }
+                    },
+                    RTree::Leaf(triangles) => { // Intersect triangles within this leaf
+                        for tri in triangles.chunks_exact(3) {
+                            let [di, ei, fi]: [u32; 3] = tri.try_into().unwrap();
+                            let (d, e, f) = (
+                                apply(larger_to_world, larger.vertices[di as usize]),
+                                apply(larger_to_world, larger.vertices[ei as usize]),
+                                apply(larger_to_world, larger.vertices[fi as usize]));
+                            let inter = Mesh::intersect_triangles(a, b, c, d, e, f); // In world space
+                            if let Some (_line_segment) = inter { // If intersection exists
+                                let tri_normal = (e - d).cross(&(f - d)).normalize();
+                                if !tri_normal[0].is_nan() && !tri_normal[1].is_nan() && !tri_normal[2].is_nan() {
+                                    intersections.push(tri_normal); // triangle normal is in world space
+                                }
                             }
                         }
                     }
                 }
-
-                // Intersect triangles in child nodes
-                let world_center = apply(larger_to_world, octree.center);
-                let (qa, qb, qc) = (Octree::<u32>::octant(world_center, a), Octree::<u32>::octant(world_center, b), Octree::<u32>::octant(world_center, c));
-                if qa == qb && qb == qc {
-                    // abc is fully within a certain child octant; intersect just it
-                    if let Some (child) = octree.children[qa as usize].as_ref().map(|b| b.as_ref()) {
-                        intersect_stack.push(child);
-                    }
-                } else {
-                    // abc is between octants; must intersect all nonempty children
-                    for child in octree.children.iter() {
-                        if let Some (c) = child.as_ref() {
-                            intersect_stack.push(c.as_ref());
-                        }
-                    }
-                }
+                // // Intersect triangles in child nodes
+                // let world_center = apply(larger_to_world, octree.center);
+                // let (qa, qb, qc) = (Octree::<u32>::octant(world_center, a), Octree::<u32>::octant(world_center, b), Octree::<u32>::octant(world_center, c));
+                // if qa == qb && qb == qc {
+                //     // abc is fully within a certain child octant; intersect just it
+                //     if let Some (child) = octree.children[qa as usize].as_ref().map(|b| b.as_ref()) {
+                //         intersect_stack.push(child);
+                //     }
+                // } else {
+                //     // abc is between octants; must intersect all nonempty children
+                //     for child in octree.children.iter() {
+                //         if let Some (c) = child.as_ref() {
+                //             intersect_stack.push(c.as_ref());
+                //         }
+                //     }
+                // }
             }
         }
         intersections
@@ -409,15 +419,15 @@ impl Mesh {
     }
 }
 
-// Performs a preorder traversal of the mesh's octree, translating indices into vertices
+// Performs a preorder traversal of the mesh's rtree, translating indices into vertices
 struct MeshIter<'a> {
     vertices: Rc<Vec<Vector3<f32>>>,
-    position: Vec<(&'a Octree<u32>, usize, usize)> // Current octree node, next index within that node, next child under that node
+    position: Vec<(&'a RTree<u32>, usize)> // Current rtree node, next child under that node
 }
 
 impl<'a> MeshIter<'a> {
     pub fn from_mesh(mesh: &Mesh) -> MeshIter {
-        MeshIter { vertices: mesh.vertices.clone(), position: vec![(&mesh.octree, 0, 0)] }
+        MeshIter { vertices: mesh.vertices.clone(), position: vec![(&mesh.rtree, 0)] }
     }
 }
 
@@ -425,8 +435,35 @@ impl<'a> Iterator for MeshIter<'a> {
     type Item = [Vector3<f32>; 3];
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some ((node, next_index, next_child)) = self.position.last_mut() {
-            if *next_index < node.triangles.len() {
+        if let Some ((node, next_child)) = self.position.last_mut() {
+            match node { // TODO make less repetitive
+                RTree::Branch(children) => {
+                    if *next_child < children.len() {
+                        // Return contents of next child node
+                        let next_position = (children[*next_child].1.as_ref(), 0);
+                        *next_child += 1;
+                        self.position.push(next_position);
+                        self.next() // TODO stack overflow if tree really deep?
+                    } else {
+                        // Exhausted this branch; return to parent
+                        self.position.pop();
+                        self.next() // TODO stack overflow if tree really deep?
+                    }
+                },
+                RTree::Leaf(triangles) => {
+                    if *next_child < triangles.len() {
+                        let (a, b, c) = (triangles[*next_child], triangles[*next_child + 1], triangles[*next_child + 2]);
+                        let tri = [self.vertices[a as usize], self.vertices[b as usize], self.vertices[c as usize]];
+                        *next_child += 3;
+                        Some (tri)
+                    } else {
+                        // Exhausted this leaf; return to parent
+                        self.position.pop();
+                        self.next() // TODO stack overflow if tree really deep?
+                    }
+                }
+            }
+            /*if *next_index < node.triangles.len() {
                 // Return triangle from current node
                 let (a, b, c) = (node.triangles[*next_index], node.triangles[*next_index + 1], node.triangles[*next_index + 2]);
                 let tri = [self.vertices[a as usize], self.vertices[b as usize], self.vertices[c as usize]];
@@ -448,7 +485,7 @@ impl<'a> Iterator for MeshIter<'a> {
                     self.position.pop();
                     self.next()
                 }
-            }
+            }*/
         } else {
             None
         }

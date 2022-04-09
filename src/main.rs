@@ -19,6 +19,7 @@ mod buffer;
 mod physics;
 mod marching_cubes;
 mod octree;
+mod rtree;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Hello, world!");
