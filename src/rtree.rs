@@ -1,9 +1,11 @@
 use std::rc::Rc;
 use std::fmt::Debug;
 
-use nalgebra::{Vector3, Vector6};
+use nalgebra::{Vector3, Vector6, vector};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
+
+use crate::octree::Octree;
 
 pub enum RTree<I> {
     Branch (Vec<(BoundingBox, Box<RTree<I>>)>),
@@ -33,7 +35,6 @@ impl<I> RTree<I> where
                 Some (Self::Leaf(leaf_indices))
             }).collect::<Vec<_>>();
             while subtrees.len() > 1 {
-                dbg!(subtrees.len());
                 let bounding_boxes = subtrees.iter().map(|s| s.as_ref().unwrap().bounding_box(vertices.clone())).collect::<Vec<_>>();
                 let rectangles = RTree::<I>::kmeans(&bounding_boxes, bounding_boxes.len() / 128 + 1);
                 subtrees = rectangles.iter().map(|cluster| {
@@ -83,26 +84,54 @@ impl<I> RTree<I> where
                 for cluster in cluster_members.iter_mut() {
                     cluster.clear();
                 }
+                // Create octree of cluster centers
+                let center_points = cluster_centers.iter().map(|bb| (bb.min + bb.max).component_div(&vector![2.0, 2.0, 2.0])); // TODO make octree take Vector6?
+                println!("center_points: {}", center_points.len());
+                let octree_centers = Octree::new((Box::new(center_points) as Box<dyn ExactSizeIterator<Item = Vector3<f32>>>).as_mut());
+                println!("octree_centers: {}", octree_centers.size());
                 // Update cluster assignments
+                let mut discrepancy = 0;
                 for (i, bb) in bounding_boxes.iter().enumerate() {
                     let point = bb.point();
+                    let point = (bb.min + bb.max).component_div(&vector![2.0, 2.0, 2.0]);
                     // Find closest cluster of point
+                    let (_, distance_octree, closest_center_octree) = octree_centers.nearest_neighbor(point); // TODO Vector6 point?
                     // TODO accelerate nearest-center search using octree maybe?
+                    /*let mut closest_center = usize::MAX;
+                    let mut closest_dist = f32::INFINITY;
+                    for (j, center) in cluster_centers.iter().enumerate() {
+                        let dist = (center.point() - point).magnitude_squared();
+                        if dist < closest_dist {
+                            closest_dist = dist;
+                            closest_center = j;
+                        }
+                    }*/
                     let mut closest_center = usize::MAX;
                     let mut closest_dist = f32::INFINITY;
                     for (j, center) in cluster_centers.iter().enumerate() {
-                        let dist = (center.point() - point).magnitude_squared(); // dist squared ensures convergence
+                        let center_point = (center.min + center.max).component_div(&vector![2.0, 2.0, 2.0]);
+                        let dist = (center_point - point).magnitude_squared();
                         if dist < closest_dist {
                             closest_dist = dist;
                             closest_center = j;
                         }
                     }
+                    if closest_center_octree as usize != closest_center {
+                        discrepancy += 1;
+                        // println!("is {}, should be {}", closest_center_octree, closest_center);
+                        // println!("dist is {}, should be {}", distance_octree, closest_dist);
+                        // panic!("ERROR! not equal!!!");
+                    }
                     // Assign point to closest cluster
-                    cluster_members[closest_center].push(i.try_into().unwrap());
+                    cluster_members[closest_center as usize].push(i.try_into().unwrap());
                 }
                 // Update cluster centers
                 let mut new_max_delta = 0.0f32;
+                let mut nonempty_clusters = 0;
                 for i in 0..k {
+                    if !cluster_members[i].is_empty() {
+                        nonempty_clusters += 1;
+                    }
                     let mut sum = Vector6::zeros();
                     for bb in cluster_members[i].iter() {
                         sum += bounding_boxes[(*bb).try_into().unwrap()].point();
@@ -112,12 +141,14 @@ impl<I> RTree<I> where
                     cluster_centers[i] = new_center;
                 }
                 iterations += 1;
-                println!("iteration {} had max delta {}", iterations, new_max_delta);
+                println!("iteration {}, with {} clusters, had max delta {}, with {} discrepancies", iterations, nonempty_clusters, new_max_delta, discrepancy);
                 max_delta = new_max_delta;
             }
             println!("kmeans iterations: {}", iterations);
             
-            cluster_members
+            // Remove empty clusters
+            cluster_members.into_iter().filter(|vec| !vec.is_empty()).collect::<Vec<_>>()
+            // cluster_members.drain_filter(|vec| vec.is_empty()).last(); // TODO unstable feature
         }
     }
 }
@@ -167,5 +198,17 @@ impl BoundingBox {
             result &= self.min[i] < other.max[i] && other.min[i] < self.max[i];
         }
         result
+    }
+
+    pub fn point_distance(&self, point: Vector3<f32>) -> f32 {
+        let mut distance_squared = 0.0;
+        for i in 0..3 {
+            if point[i] < self.min[i] {
+                distance_squared += (self.min[i] - point[i]).powi(2);
+            } else if point[i] > self.max[i] {
+                distance_squared += (point[i] - self.max[i]).powi(2);
+            }
+        }
+        distance_squared.sqrt()
     }
 }
