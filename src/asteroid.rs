@@ -87,10 +87,10 @@ impl Asteroid {
         for i in 0..vs.len() {
             vertices.extend_from_slice(vs[i].as_slice());
             vertices.extend_from_slice(normals[i].normalize().as_slice());
-            vertices.extend_from_slice(&[0.0, 0.0]);
+            vertices.extend_from_slice(&[(vs[i][0] / 20.0).rem_euclid(1.0), (vs[i][1] * vs[i][2] / 400.0).rem_euclid(1.0)]);
         }
 
-        let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true }); // TODO reenable collision with better space partitioning
+        let entity = physics.add_entity(EntityProperties { immovable: true, collision: true, gravitational: true });
         let set_entity = physics.set_entity(entity);
         set_entity.position = Vector3::from([0.0, 5.0, 0.0]);
         set_entity.rotation = UnitQuaternion::identity();
@@ -98,12 +98,12 @@ impl Asteroid {
         set_entity.mass = 100.0;
 
         set_entity.vertices = vs.clone();
+        println!("Generating physics structures...");
         set_entity.mesh.push(Mesh::new(vs.clone(), &indices));
 
         let terrain = DynamicBuffer::new(vulkan, &vertices, BufferUsageFlags::VERTEX_BUFFER)?;
         let indices = DynamicBuffer::new(vulkan, &indices[0..1], BufferUsageFlags::INDEX_BUFFER)?;
         let texture = Texture::new(&vulkan, "res/mountain_rock.jpg")?;
-        println!("{} bytes", terrain.len * 4);
 
         Ok (Asteroid { asteroid_type, size, region: Region::new(size), terrain, indices, texture, entity })
     }
