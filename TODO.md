@@ -7,8 +7,9 @@
 - [ ] System generation
 - [ ] System rendering
 - [ ] 3D voxel asteroid generation
-- [ ] Asteroid rendering
-- [ ] Asteroid player physics
+- [ ] Player asteroid controls
+- [x] Asteroid rendering
+- [x] Asteroid player physics
 - [ ] Asteroid factory construction
 - [ ] Asteroid factory analysis
 - [ ] Asteroid factory automatic construction skydock
